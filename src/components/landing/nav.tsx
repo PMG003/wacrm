@@ -34,10 +34,15 @@ export function LandingNav() {
     // Quick auth check — no realtime needed, just the initial state.
     const supabase = createClient()
     let cancelled = false
-    supabase.auth.getSession().then(({ data }) => {
-      if (cancelled) return
-      setAuth(data.session?.user ? 'signed-in' : 'signed-out')
-    })
+    supabase.auth.getSession()
+      .then(({ data }) => {
+        if (cancelled) return
+        setAuth(data.session?.user ? 'signed-in' : 'signed-out')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAuth('signed-out')
+      })
     return () => {
       cancelled = true
     }

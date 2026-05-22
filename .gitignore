@@ -42,3 +42,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# supabase local binaries and temp files
+supabase.exe
+supabase_windows_amd64.tar.gz
+supabase-version-check.txt
+supabase/.temp/
