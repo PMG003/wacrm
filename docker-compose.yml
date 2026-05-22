@@ -18,9 +18,11 @@ services:
       - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
       - "traefik.http.routers.wacrm.rule=Host(`wacrm.firmchecks.com`)"
       - "traefik.http.routers.wacrm.entrypoints=websecure"
-      - "traefik.http.routers.wacrm.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.wacrm.tls=true"
+      - "traefik.http.routers.wacrm.tls.certresolver=mytlschallenge"
       - "traefik.http.services.wacrm.loadbalancer.server.port=3000"
     networks:
       - traefik-proxy
