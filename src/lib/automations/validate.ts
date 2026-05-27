@@ -111,8 +111,15 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       if (!nonEmpty(c.subject)) {
         issues.push({ path: `${path}.subject`, message: 'condition subject is required' })
       }
-      if (!nonEmpty(c.operand)) {
-        issues.push({ path: `${path}.operand`, message: 'condition operand is required' })
+      if (c.subject === 'message_content') {
+        // message_content uses `value` for the substring match — operand is unused
+        if (!nonEmpty(c.value)) {
+          issues.push({ path: `${path}.value`, message: 'condition value is required' })
+        }
+      } else {
+        if (!nonEmpty(c.operand)) {
+          issues.push({ path: `${path}.operand`, message: 'condition operand is required' })
+        }
       }
       break
     case 'send_webhook':
