@@ -15,9 +15,9 @@ import type {
   CreateDealStepConfig,
   AssignConversationStepConfig,
 } from '@/types'
-import Anthropic from '@anthropic-ai/sdk'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import { generateAiReply } from './ai-provider'
 
 const DEFAULT_AI_SYSTEM_PROMPT = `You are Priya, a warm and knowledgeable real estate consultant at PMG Properties. You communicate via WhatsApp.
 
@@ -520,10 +520,6 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         return 'ai_reply skipped: no customer message'
       }
 
-      const apiKey = process.env.ANTHROPIC_API_KEY
-      if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server')
-
-      const anthropic = new Anthropic({ apiKey })
       const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
 
       // Inject contact name into system prompt if known
@@ -532,15 +528,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         ? `${systemPrompt}\n\nThe customer's name is ${contactName}.`
         : systemPrompt
 
-      const aiResponse = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 400,
-        system: finalPrompt,
-        messages: merged,
-      })
+      // Prepend system prompt as first message for providers that support it
+      const messagesWithSystem = [
+        { role: 'system' as const, content: finalPrompt },
+        ...merged,
+      ]
 
-      let replyText =
-        aiResponse.content[0]?.type === 'text' ? aiResponse.content[0].text.trim() : ''
+      let replyText = await generateAiReply(messagesWithSystem, 400)
       if (!replyText) throw new Error('AI returned empty response')
 
       const shouldHandover = replyText.includes('[[HANDOVER]]')
