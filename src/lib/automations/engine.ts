@@ -3,6 +3,7 @@ import type {
   AutomationLogStepResult,
   AutomationStep,
   AutomationTriggerType,
+  AiReplyStepConfig,
   ConditionStepConfig,
   KeywordMatchTriggerConfig,
   SendMessageStepConfig,
@@ -14,8 +15,41 @@ import type {
   CreateDealStepConfig,
   AssignConversationStepConfig,
 } from '@/types'
+import Anthropic from '@anthropic-ai/sdk'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+
+const DEFAULT_AI_SYSTEM_PROMPT = `You are Priya, a warm and knowledgeable real estate consultant at PMG Properties. You communicate via WhatsApp.
+
+Your goal: have natural conversations that qualify leads and guide them toward finding the right property.
+
+HOW TO RESPOND:
+- Sound like a real person — warm, friendly, conversational. NEVER like a bot or script.
+- Keep WhatsApp messages short: 2–4 sentences max. No long walls of text.
+- Use 1–2 emojis per message for warmth, not more.
+- Ask ONE qualifying question at a time (property type → location → budget → timeline).
+- If you already know their need from the conversation, give helpful info directly.
+- Greet first-time contacts warmly by name if you know it.
+
+WHEN TO HAND OVER — end your message with [[HANDOVER]] when:
+- Lead asks to speak to someone / "call me" / "connect me to agent"
+- Lead is ready to visit a property or book an appointment
+- Lead wants specific unit availability, floor plans, or registration details
+- Lead has confirmed budget and property type and seems ready to move forward
+- After 5–6 exchanges and the lead is clearly interested
+
+PMG PROPERTIES PORTFOLIO:
+- 1BHK Flats: ₹25L–₹40L | 2BHK: ₹45L–₹75L | 3BHK: ₹80L–₹1.2Cr | 4BHK Luxury: ₹1.5Cr+
+- Villas: 3BHK ₹1.2Cr–₹1.8Cr | 4BHK ₹1.8Cr–₹2.5Cr | 5BHK Luxury Bungalow ₹3Cr+
+- Plots from ₹15L | Commercial spaces from ₹30L
+- All projects are RERA registered
+- Home loans: up to 90% financing, EMI from ₹8,000/month, 15+ bank partners
+
+NEVER:
+- Say you are an AI, bot, or automated system
+- Make up project names, exact addresses, or specific unit details not listed above
+- Send more than 4 sentences in a single message
+- Ask multiple questions at once`
 
 // ------------------------------------------------------------
 // Public API
@@ -441,6 +475,102 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         .eq('user_id', args.automation.user_id)
         .eq('contact_id', args.contactId)
       return 'conversation closed'
+    }
+
+    case 'ai_reply': {
+      const cfg = step.step_config as AiReplyStepConfig
+      if (!args.contactId) throw new Error('ai_reply needs a contact')
+
+      const conversationId = await resolveConversationId(args)
+
+      // Fetch contact name for context
+      const { data: contact } = await db
+        .from('contacts')
+        .select('name, phone')
+        .eq('id', args.contactId)
+        .maybeSingle()
+
+      // Fetch recent conversation messages
+      const { data: recentMessages } = await db
+        .from('messages')
+        .select('sender_type, content_text, created_at')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: false })
+        .limit(cfg.max_history ?? 15)
+
+      if (!recentMessages?.length) throw new Error('no messages to respond to')
+
+      // Reverse to chronological order, merge consecutive same-role messages
+      // so Claude's alternating user/assistant constraint is satisfied
+      const merged: { role: 'user' | 'assistant'; content: string }[] = []
+      for (const m of [...recentMessages].reverse()) {
+        const role = m.sender_type === 'customer' ? 'user' : 'assistant'
+        const content = (m.content_text ?? '').trim()
+        if (!content) continue
+        if (merged.length > 0 && merged[merged.length - 1].role === role) {
+          merged[merged.length - 1].content += '\n' + content
+        } else {
+          merged.push({ role, content })
+        }
+      }
+
+      // Claude requires first message to be user and last message to be user
+      while (merged.length > 0 && merged[0].role === 'assistant') merged.shift()
+      if (!merged.length || merged[merged.length - 1].role !== 'user') {
+        return 'ai_reply skipped: no customer message'
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY
+      if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured on server')
+
+      const anthropic = new Anthropic({ apiKey })
+      const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
+
+      // Inject contact name into system prompt if known
+      const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null
+      const finalPrompt = contactName
+        ? `${systemPrompt}\n\nThe customer's name is ${contactName}.`
+        : systemPrompt
+
+      const aiResponse = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        system: finalPrompt,
+        messages: merged,
+      })
+
+      let replyText =
+        aiResponse.content[0]?.type === 'text' ? aiResponse.content[0].text.trim() : ''
+      if (!replyText) throw new Error('AI returned empty response')
+
+      const shouldHandover = replyText.includes('[[HANDOVER]]')
+      replyText = replyText.replace('[[HANDOVER]]', '').trim()
+
+      if (shouldHandover && cfg.handover_message) {
+        replyText = replyText
+          ? replyText + '\n\n' + cfg.handover_message
+          : cfg.handover_message
+      }
+
+      const { whatsapp_message_id } = await engineSendText({
+        userId: args.automation.user_id,
+        conversationId,
+        contactId: args.contactId,
+        text: replyText,
+      })
+
+      if (shouldHandover) {
+        // Assign conversation to the account owner so inbox lights up
+        await db
+          .from('conversations')
+          .update({
+            assigned_agent_id: args.automation.user_id,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', conversationId)
+      }
+
+      return `AI replied (${whatsapp_message_id})${shouldHandover ? ' + handed over to agent' : ''}`
     }
 
     default:

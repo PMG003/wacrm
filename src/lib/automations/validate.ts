@@ -140,6 +140,7 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       }
       break
     case 'close_conversation':
+    case 'ai_reply':
       // No config required.
       break
     default:

@@ -232,7 +232,14 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
-  | 'close_conversation';
+  | 'close_conversation'
+  | 'ai_reply';
+
+export interface AiReplyStepConfig {
+  system_prompt?: string;
+  handover_message?: string;
+  max_history?: number;
+}
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
 
@@ -325,6 +332,7 @@ export type AutomationStepConfig =
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
+  | AiReplyStepConfig
   | Record<string, never>
   | Record<string, unknown>;
 
