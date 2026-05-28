@@ -554,12 +554,18 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // Inject contact name, language, and existing lead profile into system prompt
       const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null
       const detectedLang = args.context.input_language ?? 'en'
+      const LANG_NAMES: Record<string, string> = {
+        hi: 'Hindi', mr: 'Marathi', bn: 'Bengali', ta: 'Tamil',
+        te: 'Telugu', kn: 'Kannada', gu: 'Gujarati', pa: 'Punjabi',
+        ml: 'Malayalam', ur: 'Urdu', or: 'Odia',
+      }
+      const langName = LANG_NAMES[detectedLang]
       let finalPrompt = systemPrompt
       if (contactName) {
         finalPrompt += `\n\nThe customer's name is ${contactName}.`
       }
-      if (detectedLang !== 'en') {
-        finalPrompt += `\n\nIMPORTANT: The customer is communicating in language code "${detectedLang}". You MUST reply in that same language. Do not switch to English.`
+      if (langName) {
+        finalPrompt += `\n\nLANGUAGE RULE: This customer is speaking in ${langName}. You MUST reply entirely in ${langName}. Do not use English at all. Every word of your response must be in ${langName}.`
       }
       if (profileNote?.note_text) {
         // Strip the "[AI Lead Profile]" header line, keep the key-value lines

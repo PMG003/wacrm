@@ -73,6 +73,7 @@ SARVAM_LANG_MAP = {
     'hi': 'hi-IN', 'mr': 'mr-IN', 'ta': 'ta-IN',
     'te': 'te-IN', 'kn': 'kn-IN', 'bn': 'bn-IN',
     'gu': 'gu-IN', 'pa': 'pa-IN', 'ml': 'ml-IN',
+    'or': 'od-IN', 'ur': 'ur-IN',
 }
 
 # Non-Indic languages gTTS handles well
