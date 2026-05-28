@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Settings, MessageSquare, Tag, User } from 'lucide-react';
+import { Settings, MessageSquare, Tag, User, Users, CreditCard, Zap } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { TemplateManager } from '@/components/settings/template-manager';
@@ -9,8 +9,11 @@ import { TagManager } from '@/components/settings/tag-manager';
 import { ProfileForm } from '@/components/settings/profile-form';
 import { PasswordForm } from '@/components/settings/password-form';
 import { SessionsCard } from '@/components/settings/sessions-card';
+import { TeamSettings } from '@/components/settings/team-settings';
+import { BillingSettings } from '@/components/settings/billing-settings';
+import { QuickRepliesSettings } from '@/components/settings/quick-replies-settings';
 
-const TAB_VALUES = ['profile', 'whatsapp', 'templates', 'tags'] as const;
+const TAB_VALUES = ['profile', 'whatsapp', 'templates', 'tags', 'quick-replies', 'team', 'billing'] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
 function isTabValue(v: string | null): v is TabValue {
@@ -74,6 +77,27 @@ export default function SettingsPage() {
             <Tag className="size-4" />
             Tags
           </TabsTrigger>
+          <TabsTrigger
+            value="quick-replies"
+            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+          >
+            <Zap className="size-4" />
+            Quick Replies
+          </TabsTrigger>
+          <TabsTrigger
+            value="team"
+            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+          >
+            <Users className="size-4" />
+            Team
+          </TabsTrigger>
+          <TabsTrigger
+            value="billing"
+            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+          >
+            <CreditCard className="size-4" />
+            Billing
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-6">
@@ -92,6 +116,18 @@ export default function SettingsPage() {
 
         <TabsContent value="tags">
           <TagManager />
+        </TabsContent>
+
+        <TabsContent value="quick-replies">
+          <QuickRepliesSettings />
+        </TabsContent>
+
+        <TabsContent value="team">
+          <TeamSettings />
+        </TabsContent>
+
+        <TabsContent value="billing">
+          <BillingSettings />
         </TabsContent>
       </Tabs>
     </div>

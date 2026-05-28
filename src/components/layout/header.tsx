@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
+import { useOrg } from "@/hooks/use-org";
 import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
 import {
   Avatar,
@@ -41,9 +42,23 @@ interface HeaderProps {
   onOpenSidebar?: () => void;
 }
 
+function trialDaysLeft(trialEndsAt: string | null): number | null {
+  if (!trialEndsAt) return null;
+  const diff = new Date(trialEndsAt).getTime() - Date.now();
+  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+}
+
+const PLAN_STYLES: Record<string, string> = {
+  trial: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  starter: "bg-blue-500/15 text-blue-400 border-blue-500/20",
+  pro: "bg-violet-500/15 text-violet-400 border-violet-500/20",
+  enterprise: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+};
+
 export function Header({ onOpenSidebar }: HeaderProps) {
   const pathname = usePathname();
   const { profile, signOut } = useAuth();
+  const { org } = useOrg();
   const title = getPageTitle(pathname);
 
   const initial =
@@ -67,6 +82,20 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           {title}
         </h1>
       </div>
+
+      <div className="flex items-center gap-2">
+        {/* Plan badge */}
+        {org && (
+          <span
+            className={`hidden rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex ${
+              PLAN_STYLES[org.plan] ?? PLAN_STYLES.trial
+            }`}
+          >
+            {org.plan === "trial"
+              ? `Trial${trialDaysLeft(org.trial_ends_at) !== null ? ` · ${trialDaysLeft(org.trial_ends_at)}d` : ""}`
+              : org.plan.charAt(0).toUpperCase() + org.plan.slice(1)}
+          </span>
+        )}
 
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -100,6 +129,11 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             <p className="truncate text-xs text-slate-400">
               {profile?.email ?? ""}
             </p>
+            {org && (
+              <p className="mt-1 truncate text-xs text-slate-500">
+                {org.name}
+              </p>
+            )}
           </div>
           <DropdownMenuSeparator className="bg-slate-800" />
           <DropdownMenuItem
@@ -134,6 +168,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      </div>
     </header>
   );
 }

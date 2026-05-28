@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
+import { OrgProvider, useOrg } from "@/hooks/use-org";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 
@@ -12,6 +13,7 @@ import { Header } from "@/components/layout/header";
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  const { hasWhatsApp, loading: orgLoading, orgError } = useOrg();
   const router = useRouter();
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
@@ -24,6 +26,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
       router.push("/login");
     }
   }, [user, loading, router]);
+
+  // Onboarding redirect disabled — seed data provides whatsapp_config.
+  // Re-enable once auth flow is fully tested.
 
   if (loading) {
     return (
@@ -53,7 +58,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <DashboardShellInner>{children}</DashboardShellInner>
+      <OrgProvider>
+        <DashboardShellInner>{children}</DashboardShellInner>
+      </OrgProvider>
     </AuthProvider>
   );
 }

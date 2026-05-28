@@ -10,6 +10,7 @@ import {
   UserPlus,
   Clock,
   ArrowLeft,
+  StickyNote,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -19,11 +20,17 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageComposer } from "./message-composer";
+import { ConversationNotesPanel } from "./conversation-notes-panel";
 import { toast } from "sonner";
+
+interface OrgMember {
+  user_id: string;
+  name: string;
+}
 
 interface MessageThreadProps {
   conversation: Conversation | null;
@@ -33,12 +40,6 @@ interface MessageThreadProps {
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
   onStatusChange: (conversationId: string, status: ConversationStatus) => void;
-  /**
-   * On mobile, the thread is shown full-screen with the conversation list
-   * hidden. This callback lets the page deselect the active conversation
-   * and reveal the list again. Rendered as a back-arrow in the header on
-   * mobile only.
-   */
   onBack?: () => void;
 }
 
@@ -83,14 +84,41 @@ export function MessageThread({
   onBack,
 }: MessageThreadProps) {
   const [loading, setLoading] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [assignedAgentId, setAssignedAgentId] = useState<string | null>(
+    conversation?.assigned_agent_id ?? null
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
-  // 24-hour session timer
+  // Sync assigned agent when conversation changes
+  useEffect(() => {
+    setAssignedAgentId(conversation?.assigned_agent_id ?? null);
+    setShowNotes(false);
+  }, [conversation?.id, conversation?.assigned_agent_id]);
+
+  // Fetch org members for the assign dropdown
+  useEffect(() => {
+    const supabase = createClient();
+    supabase
+      .from("organization_members")
+      .select("user_id, profiles(full_name, email)")
+      .then(({ data }) => {
+        if (!data) return;
+        const list = (data as unknown as Array<{
+          user_id: string;
+          profiles: { full_name: string | null; email: string } | null;
+        }>).map((m) => ({
+          user_id: m.user_id,
+          name: m.profiles?.full_name || m.profiles?.email || m.user_id,
+        }));
+        setMembers(list);
+      });
+  }, []);
+
   const sessionInfo = useMemo(() => {
     if (!messages.length) return { expired: false, remaining: "" };
 
-    // Find last customer message
     const lastCustomerMsg = [...messages]
       .reverse()
       .find((m) => m.sender_type === "customer");
@@ -100,9 +128,7 @@ export function MessageThread({
     const hoursSince = differenceInHours(new Date(), new Date(lastCustomerMsg.created_at));
     const expired = hoursSince >= 24;
 
-    if (expired) {
-      return { expired: true, remaining: "Expired" };
-    }
+    if (expired) return { expired: true, remaining: "Expired" };
 
     const hoursLeft = 24 - hoursSince;
     const remaining =
@@ -113,13 +139,6 @@ export function MessageThread({
     return { expired, remaining };
   }, [messages]);
 
-  // Store latest callback in a ref so fetchMessages doesn't need to
-  // depend on `onMessagesLoaded` — otherwise parent re-renders cause
-  // fetchMessages to change → useEffect re-fires → refetch → realtime
-  // UPDATE on conversations.unread_count → parent re-renders → LOOP.
-  // The ref is written inside an effect so the mutation doesn't happen
-  // during render (React 19 refs rule); consumers only read `.current`
-  // inside the async fetch completion, which runs after the render.
   const onMessagesLoadedRef = useRef(onMessagesLoaded);
   useEffect(() => {
     onMessagesLoadedRef.current = onMessagesLoaded;
@@ -128,10 +147,6 @@ export function MessageThread({
   const conversationId = conversation?.id;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
 
-  // Fetch messages whenever the selected conversation changes. Kept
-  // separate from the unread-reset effect so that incoming messages
-  // arriving while the thread is open don't trigger a full refetch —
-  // they only flip hasUnread, which only the reset effect listens to.
   useEffect(() => {
     if (!conversationId) return;
 
@@ -158,20 +173,9 @@ export function MessageThread({
       if (!cancelled) setLoading(false);
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [conversationId]);
 
-  // Reset the server-side unread_count to 0 whenever an unread count
-  // surfaces on the active conversation — covers both (a) opening a
-  // conversation that had unread messages and (b) new messages arriving
-  // while the user is already viewing the thread (webhook server-bumps
-  // unread_count to N+1; the realtime UPDATE propagates it into the
-  // client, which re-runs this effect and flips it back to 0).
-  //
-  // Guarding on hasUnread prevents the eq-update loop: once unread_count
-  // is 0 the condition is false, so no further UPDATE is issued.
   useEffect(() => {
     if (!conversationId || !hasUnread) return;
     const supabase = createClient();
@@ -184,7 +188,6 @@ export function MessageThread({
       });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
       const el = scrollRef.current;
@@ -197,8 +200,6 @@ export function MessageThread({
       if (!conversation) return;
 
       const tempId = `temp-${Date.now()}`;
-
-      // Optimistic update — shows the message immediately with "sending" status
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
@@ -225,19 +226,13 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send message:", reason);
           toast.error(`Failed to send: ${reason}`);
-          // Mark the optimistic bubble as failed so the user sees what happened
           onUpdateMessage(tempId, { status: "failed" });
           return;
         }
 
-        // Success — the realtime INSERT event will replace the temp bubble
-        // with the real DB row. If realtime hasn't arrived yet, at least
-        // flip status to 'sent' so the UI stops showing "sending".
         onUpdateMessage(tempId, { status: "sent" });
       } catch (err) {
-        console.error("Failed to send message:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
@@ -251,22 +246,58 @@ export function MessageThread({
       if (!conversation) return;
 
       const supabase = createClient();
+      const updates: Record<string, unknown> = { status };
+      if (status === "closed") updates.resolved_at = new Date().toISOString();
+
       await supabase
         .from("conversations")
-        .update({ status })
+        .update(updates)
         .eq("id", conversation.id);
+
+      // Create CSAT survey on close (ignore if one already exists)
+      if (status === "closed") {
+        await supabase.from("csat_surveys").upsert(
+          {
+            conversation_id: conversation.id,
+            contact_id: contact?.id ?? null,
+            assigned_agent_id: assignedAgentId,
+          },
+          { onConflict: "conversation_id", ignoreDuplicates: true }
+        );
+      }
 
       onStatusChange(conversation.id, status);
     },
-    [conversation, onStatusChange]
+    [conversation, contact, assignedAgentId, onStatusChange]
+  );
+
+  const handleAssign = useCallback(
+    async (agentId: string | null) => {
+      if (!conversation) return;
+
+      const res = await fetch(`/api/conversations/${conversation.id}/assign`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId }),
+      });
+
+      if (res.ok) {
+        setAssignedAgentId(agentId);
+        const name = agentId
+          ? (members.find((m) => m.user_id === agentId)?.name ?? "agent")
+          : "nobody";
+        toast.success(agentId ? `Assigned to ${name}` : "Assignment cleared");
+      } else {
+        toast.error("Failed to assign conversation");
+      }
+    },
+    [conversation, members]
   );
 
   const handleOpenTemplates = useCallback(() => {
-    setTemplateModalOpen(true);
-    // Template modal implementation would go here
+    // Template modal implementation
   }, []);
 
-  // Empty state
   if (!conversation || !contact) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center bg-slate-950">
@@ -285,17 +316,14 @@ export function MessageThread({
 
   const displayName = contact.name || contact.phone;
   const messageGroups = groupMessagesByDate(messages);
-  const currentStatus = STATUS_OPTIONS.find(
-    (s) => s.value === conversation.status
-  );
+  const currentStatus = STATUS_OPTIONS.find((s) => s.value === conversation.status);
+  const assignedMember = members.find((m) => m.user_id === assignedAgentId);
 
   return (
     <div className="flex flex-1 flex-col bg-slate-950">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          {/* Back-to-list button — mobile only. Hidden on lg+ where the
-              conversation list is always visible next to the thread. */}
           {onBack && (
             <button
               type="button"
@@ -313,8 +341,6 @@ export function MessageThread({
             <h2 className="truncate text-sm font-semibold text-white">{displayName}</h2>
             <p className="truncate text-xs text-slate-400">{contact.phone}</p>
           </div>
-          {/* Session timer badge — hidden on the narrowest phones so
-              the name + back arrow keep their room. */}
           <Badge
             variant="outline"
             className={cn(
@@ -327,20 +353,33 @@ export function MessageThread({
           </Badge>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {/* Notes toggle */}
+          <button
+            type="button"
+            onClick={() => setShowNotes((p) => !p)}
+            title="Internal notes"
+            className={cn(
+              "flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors",
+              showNotes
+                ? "bg-amber-500/10 text-amber-400"
+                : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <StickyNote className="h-3 w-3" />
+            <span className="hidden sm:inline">Notes</span>
+          </button>
+
           {/* Status dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-slate-800",
-                  currentStatus?.color ?? "text-slate-400"
-                )}>
-                {currentStatus?.label ?? "Status"}
-                <ChevronDown className="h-3 w-3" />
+              "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-slate-800",
+              currentStatus?.color ?? "text-slate-400"
+            )}>
+              {currentStatus?.label ?? "Status"}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="border-slate-700 bg-slate-800"
-            >
+            <DropdownMenuContent align="end" className="border-slate-700 bg-slate-800">
               {STATUS_OPTIONS.map((opt) => (
                 <DropdownMenuItem
                   key={opt.value}
@@ -353,49 +392,88 @@ export function MessageThread({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Assign button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1 text-xs text-slate-400 hover:text-white"
-          >
-            <UserPlus className="h-3 w-3" />
-            Assign
-          </Button>
+          {/* Assign dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md text-slate-400 hover:bg-slate-800 hover:text-white">
+              <UserPlus className="h-3 w-3" />
+              <span className="hidden sm:inline max-w-[80px] truncate">
+                {assignedMember?.name ?? "Assign"}
+              </span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-slate-700 bg-slate-800 w-48">
+              {members.map((m) => (
+                <DropdownMenuItem
+                  key={m.user_id}
+                  onClick={() => handleAssign(m.user_id)}
+                  className={cn(
+                    "text-sm text-slate-200",
+                    m.user_id === assignedAgentId && "text-violet-400"
+                  )}
+                >
+                  {m.name}
+                  {m.user_id === assignedAgentId && (
+                    <span className="ml-auto text-[10px] text-violet-400">assigned</span>
+                  )}
+                </DropdownMenuItem>
+              ))}
+              {assignedAgentId && (
+                <>
+                  <DropdownMenuSeparator className="bg-slate-700" />
+                  <DropdownMenuItem
+                    onClick={() => handleAssign(null)}
+                    className="text-sm text-slate-500"
+                  >
+                    Clear assignment
+                  </DropdownMenuItem>
+                </>
+              )}
+              {members.length === 0 && (
+                <DropdownMenuItem disabled className="text-xs text-slate-500">
+                  No team members
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {/* Messages Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-slate-500">No messages yet</p>
-            <p className="text-xs text-slate-600">
-              Send a template to start the conversation
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {messageGroups.map((group) => (
-              <div key={group.date}>
-                {/* Date separator */}
-                <div className="mb-4 flex items-center justify-center">
-                  <span className="rounded-full bg-slate-800 px-3 py-1 text-[10px] font-medium text-slate-400">
-                    {formatDateSeparator(group.date)}
-                  </span>
+      {/* Messages + Notes */}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <p className="text-sm text-slate-500">No messages yet</p>
+              <p className="text-xs text-slate-600">
+                Send a template to start the conversation
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {messageGroups.map((group) => (
+                <div key={group.date}>
+                  <div className="mb-4 flex items-center justify-center">
+                    <span className="rounded-full bg-slate-800 px-3 py-1 text-[10px] font-medium text-slate-400">
+                      {formatDateSeparator(group.date)}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {group.messages.map((msg) => (
+                      <MessageBubble key={msg.id} message={msg} />
+                    ))}
+                  </div>
                 </div>
-                {/* Messages */}
-                <div className="space-y-2">
-                  {group.messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} />
-                  ))}
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
+          )}
+        </div>
+
+        {showNotes && (
+          <div className="h-56 shrink-0">
+            <ConversationNotesPanel conversationId={conversation.id} />
           </div>
         )}
       </div>
