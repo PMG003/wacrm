@@ -109,6 +109,74 @@ NEVER:
 - Make fake commitments or manufactured scarcity`
 
 // ------------------------------------------------------------
+// Dynamic per-tenant prompt builder
+// ------------------------------------------------------------
+
+async function buildDynamicPrompt(orgId?: string): Promise<string> {
+  if (!orgId) return DEFAULT_AI_SYSTEM_PROMPT
+
+  const db = supabaseAdmin()
+  const { data: cfg } = await db
+    .from('org_ai_config')
+    .select('*')
+    .eq('org_id', orgId)
+    .maybeSingle()
+
+  if (!cfg) return DEFAULT_AI_SYSTEM_PROMPT
+
+  // If the tenant set a full custom prompt, use it verbatim
+  if (cfg.custom_system_prompt?.trim()) return cfg.custom_system_prompt.trim()
+
+  const agentName = cfg.agent_name || 'Riya'
+  const companyName = cfg.company_name || ''
+  const companyAbout = cfg.company_about || ''
+  const serviceAreas: string[] = cfg.service_areas ?? []
+  const languages: string[] = cfg.languages ?? ['en']
+  const tone: string = cfg.agent_tone ?? 'professional'
+  const activeListings: string = cfg.active_listings || ''
+
+  const LANG_FULL: Record<string, string> = {
+    en: 'English', hi: 'Hindi', bn: 'Bengali', mr: 'Marathi',
+    ta: 'Tamil', te: 'Telugu', kn: 'Kannada', gu: 'Gujarati',
+    pa: 'Punjabi', ml: 'Malayalam',
+  }
+  const langList = languages.map(l => LANG_FULL[l] ?? l).join(', ')
+
+  const TONE_DESC: Record<string, string> = {
+    professional: 'You are balanced, trustworthy, and data-driven. Build rapport before pushing for a close.',
+    aggressive: 'You are a hard closer. Push every conversation toward a commitment. Create urgency, handle objections fast, and always ask for the next step.',
+    friendly: 'You are warm, consultative, and empathetic. Build genuine trust, ask about family needs, and guide the customer at their own pace.',
+  }
+  const toneDesc = TONE_DESC[tone] ?? TONE_DESC.professional
+
+  let prompt = `You are ${agentName}, a real estate agent${companyName ? ` at ${companyName}` : ''}.`
+  if (companyAbout) prompt += ` ${companyAbout}`
+  prompt += `\n\n${toneDesc}`
+  prompt += `\n\nYou communicate via WhatsApp. Always match the customer's language exactly. Supported languages: ${langList}.`
+
+  if (serviceAreas.length > 0) {
+    prompt += `\n\nSERVICE AREAS: ${serviceAreas.join(', ')}.`
+  }
+
+  if (activeListings) {
+    prompt += `\n\nACTIVE LISTINGS:\n${activeListings}`
+  }
+
+  prompt += `\n\nHOW TO COMMUNICATE:
+- 2–4 sentences max per WhatsApp message. No walls of text.
+- Always match the customer's language
+- Always end with ONE clear question or next step
+- 1 emoji max per message
+
+NEVER:
+- Admit you are an AI or bot
+- Invent prices or project names not given to you
+- Give a discount without checking with the team first`
+
+  return prompt
+}
+
+// ------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------
 
@@ -121,6 +189,8 @@ export interface AutomationContext {
   input_type?: 'text' | 'audio'
   /** ISO 639-1 language code detected by Whisper (e.g. "hi", "en", "ta"). */
   input_language?: string
+  /** Organisation id — used to load per-tenant AI config from org_ai_config. */
+  org_id?: string
   /** Arbitrary variables accumulated during execution. */
   vars?: Record<string, unknown>
   /** The tag id that was added, for tag_added trigger. */
@@ -592,7 +662,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       }
 
       const isVoice = args.context.input_type === 'audio'
-      const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
+      const systemPrompt = cfg.system_prompt ?? await buildDynamicPrompt(args.context.org_id)
 
       // Inject contact name, language, lead profile, and voice format instruction
       const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null

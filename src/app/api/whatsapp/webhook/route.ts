@@ -731,6 +731,7 @@ async function processMessage(
         conversation_id: conversation.id,
         input_type: inputType,
         input_language: detectedLanguage,
+        org_id: orgId ?? undefined,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }

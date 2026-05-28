@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Settings, MessageSquare, Tag, User, Palette } from 'lucide-react';
+import { Settings, MessageSquare, Tag, User, Palette, Bot } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { TemplateManager } from '@/components/settings/template-manager';
@@ -10,6 +10,7 @@ import { ProfileForm } from '@/components/settings/profile-form';
 import { PasswordForm } from '@/components/settings/password-form';
 import { SessionsCard } from '@/components/settings/sessions-card';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
+import { AiAgentConfig } from '@/components/settings/ai-agent-config';
 
 const TAB_VALUES = [
   'profile',
@@ -17,6 +18,7 @@ const TAB_VALUES = [
   'templates',
   'tags',
   'appearance',
+  'ai-agent',
 ] as const;
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -88,6 +90,13 @@ export default function SettingsPage() {
             <Palette className="size-4" />
             Appearance
           </TabsTrigger>
+          <TabsTrigger
+            value="ai-agent"
+            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
+          >
+            <Bot className="size-4" />
+            AI Agent
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-6">
@@ -110,6 +119,10 @@ export default function SettingsPage() {
 
         <TabsContent value="appearance">
           <AppearancePanel />
+        </TabsContent>
+
+        <TabsContent value="ai-agent">
+          <AiAgentConfig />
         </TabsContent>
       </Tabs>
     </div>
