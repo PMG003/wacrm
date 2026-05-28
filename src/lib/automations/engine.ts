@@ -59,6 +59,8 @@ PMG PROPERTIES PORTFOLIO:
 - Plots from ₹15L | Commercial spaces from ₹30L
 - All RERA registered | Home loans: up to 90% financing, 15+ bank partners, EMI from ₹8,000/month
 
+OFF-TOPIC: If the customer asks about anything unrelated to real estate (food, weather, cricket, politics, general chat, other industries), reply politely in 1 sentence that you only assist with real estate, then redirect with one qualifying question about their property needs.
+
 NEVER:
 - Admit you are an AI, bot, or automated system
 - Invent project names, exact unit numbers, floor plans, or delivery dates not listed above
@@ -549,9 +551,10 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         return 'ai_reply skipped: no customer message'
       }
 
+      const isVoice = args.context.input_type === 'audio'
       const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
 
-      // Inject contact name, language, and existing lead profile into system prompt
+      // Inject contact name, language, lead profile, and voice format instruction
       const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null
       const detectedLang = args.context.input_language ?? 'en'
       const LANG_NAMES: Record<string, string> = {
@@ -568,7 +571,6 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         finalPrompt += `\n\nLANGUAGE RULE: This customer is speaking in ${langName}. You MUST reply entirely in ${langName}. Do not use English at all. Every word of your response must be in ${langName}.`
       }
       if (profileNote?.note_text) {
-        // Strip the "[AI Lead Profile]" header line, keep the key-value lines
         const profileLines = profileNote.note_text
           .split('\n')
           .slice(1)
@@ -578,33 +580,44 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           finalPrompt += `\n\nCONTACT HISTORY (from previous conversations):\n${profileLines}\nUse this context to avoid re-asking questions you already know the answer to.`
         }
       }
+      if (isVoice) {
+        finalPrompt += `\n\nVOICE RESPONSE FORMAT: Your reply MUST have exactly two labelled sections:
+[VOICE]: 2–3 short conversational sentences in the customer's language. This will be spoken aloud — keep it natural and brief.
+[DETAILS]: If you mentioned any specific property (price, BHK, location, amenities), list the key details in clean readable text here. This will be sent as a WhatsApp text card. Write NONE if no property details apply.`
+      }
 
-      // Prepend system prompt as first message for providers that support it
       const messagesWithSystem = [
         { role: 'system' as const, content: finalPrompt },
         ...merged,
       ]
 
-      let replyText = await generateAiReply(messagesWithSystem, 250)
-      if (!replyText) throw new Error('AI returned empty response')
+      let rawReply = await generateAiReply(messagesWithSystem, 400)
+      if (!rawReply) throw new Error('AI returned empty response')
 
-      const shouldHandover = replyText.includes('[[HANDOVER]]')
-      replyText = replyText.replace('[[HANDOVER]]', '').trim()
+      const shouldHandover = rawReply.includes('[[HANDOVER]]')
+      rawReply = rawReply.replace('[[HANDOVER]]', '').trim()
 
-      if (shouldHandover && cfg.handover_message) {
-        replyText = replyText
-          ? replyText + '\n\n' + cfg.handover_message
-          : cfg.handover_message
+      // Parse [VOICE] / [DETAILS] split for voice messages
+      let replyText = rawReply
+      let detailsText: string | null = null
+      if (isVoice) {
+        const voiceMatch = rawReply.match(/\[VOICE\]:\s*([\s\S]*?)(?=\[DETAILS\]:|$)/i)
+        const detailsMatch = rawReply.match(/\[DETAILS\]:\s*([\s\S]*?)$/i)
+        if (voiceMatch?.[1]?.trim()) {
+          replyText = voiceMatch[1].trim()
+          const raw = detailsMatch?.[1]?.trim()
+          if (raw && !/^none$/i.test(raw)) detailsText = raw
+        }
       }
 
-      const isVoice = args.context.input_type === 'audio'
+      if (shouldHandover && cfg.handover_message) {
+        replyText = replyText ? replyText + '\n\n' + cfg.handover_message : cfg.handover_message
+      }
 
       let whatsapp_message_id: string
       let sent_as: 'audio' | 'text'
 
       if (isVoice) {
-        // Voice input: send audio note first, then follow up with text so the
-        // customer gets both the voice reply AND readable property details.
         const audioResult = await engineSendAudio({
           userId: args.automation.user_id,
           conversationId,
@@ -614,15 +627,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         })
         whatsapp_message_id = audioResult.whatsapp_message_id
         sent_as = audioResult.sent_as
-        // Only send text follow-up if audio actually went out — if engineSendAudio
-        // already fell back to text internally, sending again would duplicate it.
-        if (sent_as === 'audio') {
+        // Send property details as text only when audio succeeded and details exist
+        if (sent_as === 'audio' && detailsText) {
           engineSendText({
             userId: args.automation.user_id,
             conversationId,
             contactId: args.contactId,
-            text: replyText,
-          }).catch(err => console.error('[ai_reply] voice follow-up text failed:', err))
+            text: detailsText,
+          }).catch(err => console.error('[ai_reply] details text failed:', err))
         }
       } else {
         const textResult = await engineSendText({
