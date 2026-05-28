@@ -586,19 +586,38 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       }
 
       const isVoice = args.context.input_type === 'audio'
-      const { whatsapp_message_id, sent_as } = isVoice
-        ? await engineSendAudio({
-            userId: args.automation.user_id,
-            conversationId,
-            contactId: args.contactId,
-            text: replyText,
-          })
-        : { ...(await engineSendText({
-              userId: args.automation.user_id,
-              conversationId,
-              contactId: args.contactId,
-              text: replyText,
-            })), sent_as: 'text' as const }
+
+      let whatsapp_message_id: string
+      let sent_as: 'audio' | 'text'
+
+      if (isVoice) {
+        // Voice input: send audio note first, then follow up with text so the
+        // customer gets both the voice reply AND readable property details.
+        const audioResult = await engineSendAudio({
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text: replyText,
+        })
+        whatsapp_message_id = audioResult.whatsapp_message_id
+        sent_as = audioResult.sent_as
+        // Fire-and-forget text follow-up — if it fails the voice already arrived
+        engineSendText({
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text: replyText,
+        }).catch(err => console.error('[ai_reply] voice follow-up text failed:', err))
+      } else {
+        const textResult = await engineSendText({
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text: replyText,
+        })
+        whatsapp_message_id = textResult.whatsapp_message_id
+        sent_as = 'text'
+      }
 
       if (shouldHandover) {
         // Assign conversation to the account owner so inbox lights up
