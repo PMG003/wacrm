@@ -41,8 +41,8 @@ async function callOllama(messages: ChatMessage[], maxTokens: number): Promise<s
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ollama' },
     body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: false }),
-    // 30-second timeout — local inference can be slow on CPU
-    signal: AbortSignal.timeout(30_000),
+    // 90-second timeout — CPU inference with 3B models can be slow on first call
+    signal: AbortSignal.timeout(90_000),
   })
 
   if (!res.ok) {

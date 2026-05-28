@@ -573,7 +573,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         ...merged,
       ]
 
-      let replyText = await generateAiReply(messagesWithSystem, 400)
+      let replyText = await generateAiReply(messagesWithSystem, 250)
       if (!replyText) throw new Error('AI returned empty response')
 
       const shouldHandover = replyText.includes('[[HANDOVER]]')
