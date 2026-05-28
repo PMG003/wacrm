@@ -111,9 +111,25 @@ async def text_to_speech(req: TTSRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# Best female speaker per language (Sarvam bulbul:v2)
+SARVAM_SPEAKERS = {
+    'hi': 'anushka',   # Hindi — confirmed working
+    'mr': 'anushka',   # Marathi — same family, anushka works
+    'bn': 'anushka',   # Bengali — fallback if fails
+    'ta': 'anushka',   # Tamil
+    'te': 'anushka',   # Telugu
+    'kn': 'anushka',   # Kannada
+    'gu': 'anushka',   # Gujarati
+    'pa': 'anushka',   # Punjabi
+    'ml': 'anushka',   # Malayalam
+    'or': 'anushka',   # Odia
+    'ur': 'anushka',   # Urdu
+}
+
 async def _sarvam_tts(text: str, lang: str) -> Response:
-    """Sarvam AI TTS — natural Indian female voice (meera). Returns audio/mpeg."""
+    """Sarvam AI TTS — natural Indian female voice. Returns audio/mpeg."""
     sarvam_lang = SARVAM_LANG_MAP[lang]
+    speaker = SARVAM_SPEAKERS.get(lang, 'anushka')
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://api.sarvam.ai/text-to-speech",
@@ -121,7 +137,7 @@ async def _sarvam_tts(text: str, lang: str) -> Response:
             json={
                 "inputs": [text],
                 "target_language_code": sarvam_lang,
-                "speaker": "anushka",
+                "speaker": speaker,
                 "pitch": 0,
                 "pace": 1.1,
                 "loudness": 1.5,
@@ -131,7 +147,9 @@ async def _sarvam_tts(text: str, lang: str) -> Response:
             },
             timeout=30.0,
         )
-    resp.raise_for_status()
+    if not resp.is_success:
+        print(f"[Sarvam] {resp.status_code} for lang={lang} ({sarvam_lang}) speaker={speaker}: {resp.text}")
+        resp.raise_for_status()
     wav_bytes = base64.b64decode(resp.json()["audios"][0])
 
     # Sarvam returns WAV — convert to MP3 via ffmpeg (already in container for whisper)
