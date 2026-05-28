@@ -160,6 +160,46 @@ Always cover:
 
 ---
 
+## 7. ACTIVE PROPERTY LISTINGS
+
+### Commercial Office Space
+
+#### Martin Burn Business Park — Salt Lake Sector V
+| Parameter | Details |
+|-----------|---------|
+| Building | Martin Burn Business Park |
+| Location | Block-B, P Salt Lake, Sector V, Kolkata |
+| Floor | 17th Floor |
+| Area | 3,030 sq ft |
+| Rent | ₹43/sq ft/month → **Total ₹1,30,290/month** |
+| Rent Escalation | 15% every 3 years |
+| Security Deposit | 6 months rent |
+| Lease Period | 3+3+3 years |
+| Locking Period | 3 years |
+| Maintenance | ₹6/sq ft/month (as actual) + GST |
+| Property Tax | Payable by tenant (as actual) |
+| Notice Period | 3 months |
+| Rent Due Date | 21st of each month |
+| Power & Water | As actual |
+| Car Parking | 2 slots @ ₹5,000/each/month |
+| Power Load | As per requirement |
+| Toilets / Pantry | 2 toilets + 1 pantry |
+| Furnished | Semi-Furnished |
+| Brokerage (Rent) | 1 month rent + GST |
+| Brokerage (Sale) | 2% of sale value + GST |
+
+**Pitch Points:**
+- Prime IT hub location — Sector V is Kolkata's Silicon Valley
+- 17th floor — panoramic city views, prestigious address
+- 3,030 sq ft ideal for 40–60 seat office
+- Semi-furnished — saves fit-out cost and time
+- 3+3+3 lease provides long-term stability for corporate tenants
+- 2 dedicated car parks included
+
+**Ideal Tenant Profile:** IT/ITES companies, fintech startups, consulting firms, BPOs, corporate HQs relocating to Kolkata
+
+---
+
 ## 7. LOCAL DEVELOPER TRUST SIGNALS
 
 Reputed Kolkata developers: Merlin Group, Ambuja Neotia, PS Group, Siddha Group, Hiland, Mani Group, Shrachi, Space Group
