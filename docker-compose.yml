@@ -17,12 +17,13 @@ services:
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
       - AUTOMATION_CRON_SECRET=${AUTOMATION_CRON_SECRET}
+      # AI provider — routes LLM calls to the existing Ollama container
       - AI_PROVIDER=${AI_PROVIDER:-ollama}
-      - AI_MODEL=${AI_MODEL:-gemma2:2b}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - AI_MODEL=${AI_MODEL:-llama3.2:3b}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # STT / TTS microservice
+      - AI_SERVICE_URL=${AI_SERVICE_URL:-http://wacrm-ai:8001}
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-proxy"
@@ -33,7 +34,26 @@ services:
       - "traefik.http.services.wacrm.loadbalancer.server.port=3000"
     networks:
       - traefik-proxy
+      - n8n_internal      # reach ollama:11434
+      - wacrm_internal    # reach wacrm-ai:8001
+    depends_on:
+      - wacrm-ai
+
+  wacrm-ai:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: wacrm-ai
+    restart: unless-stopped
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-tiny}
+    networks:
+      - wacrm_internal
 
 networks:
   traefik-proxy:
     external: true
+  n8n_internal:
+    external: true
+  wacrm_internal:
+    driver: bridge

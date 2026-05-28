@@ -2,6 +2,33 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+
+async function transcribeAudio(
+  mediaId: string,
+  mimeType: string,
+  accessToken: string,
+): Promise<string | null> {
+  const aiServiceUrl = process.env.AI_SERVICE_URL
+  if (!aiServiceUrl) return null
+  try {
+    const { url } = await getMediaUrl({ mediaId, accessToken })
+    const { buffer } = await downloadMedia({ downloadUrl: url, accessToken })
+    const form = new FormData()
+    const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mpeg') ? 'mp3' : 'ogg'
+    form.append('audio', new Blob([buffer], { type: mimeType }), `voice.${ext}`)
+    const res = await fetch(`${aiServiceUrl}/stt`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { text?: string }
+    return data.text?.trim() || null
+  } catch (err) {
+    console.error('[STT] transcription failed:', err)
+    return null
+  }
+}
 import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -172,7 +199,10 @@ export async function POST(request: Request) {
 }
 
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
-  if (!body.entry) return
+  if (!body.entry) {
+    console.log('[webhook] body has no entries — likely a verification ping')
+    return
+  }
 
   for (const entry of body.entry) {
     for (const change of entry.changes) {
@@ -180,15 +210,20 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       // Handle status updates
       if (value.statuses) {
+        console.log('[webhook] status update for', value.statuses.map(s => s.status).join(', '))
         for (const status of value.statuses) {
           await handleStatusUpdate(status)
         }
       }
 
       // Handle incoming messages
-      if (!value.messages || !value.contacts) continue
+      if (!value.messages || !value.contacts) {
+        console.log('[webhook] change has no messages (field:', change.field, ')')
+        continue
+      }
 
       const phoneNumberId = value.metadata.phone_number_id
+      console.log('[webhook] inbound message on phone_number_id:', phoneNumberId)
 
       // Find user's config by phone_number_id
       const { data: config, error: configError } = await supabaseAdmin()
@@ -198,11 +233,26 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         .single()
 
       if (configError || !config) {
-        console.error('No config found for phone_number_id:', phoneNumberId)
+        console.error('[webhook] no config found for phone_number_id:', phoneNumberId, '— save real credentials in Settings → WhatsApp')
         continue
       }
 
       const decryptedAccessToken = decrypt(config.access_token)
+
+      // Resolve org_id — the service role bypasses RLS so auth.uid() is
+      // null and the set_org_id trigger can't fire. We look it up once
+      // per webhook entry and pass it explicitly to every insert so the
+      // org-scoped RLS policy (org_id = public.org_id()) lets the
+      // browser client see newly created conversations and contacts.
+      let orgId: string | null = config.org_id ?? null
+      if (!orgId) {
+        const { data: member } = await supabaseAdmin()
+          .from('organization_members')
+          .select('org_id')
+          .eq('user_id', config.user_id)
+          .maybeSingle()
+        orgId = member?.org_id ?? null
+      }
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
@@ -212,6 +262,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           message,
           contact,
           config.user_id,
+          orgId,
           decryptedAccessToken
         )
       }
@@ -355,13 +406,14 @@ async function processMessage(
   message: WhatsAppMessage,
   contact: { profile: { name: string }; wa_id: string },
   userId: string,
+  orgId: string | null,
   accessToken: string
 ) {
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType } = await parseMessageContent(
+  const { contentText, mediaUrl, mediaType, inputType } = await parseMessageContent(
     message,
     accessToken
   )
@@ -369,6 +421,7 @@ async function processMessage(
   // Find or create contact
   const contactOutcome = await findOrCreateContact(
     userId,
+    orgId,
     senderPhone,
     contactName
   )
@@ -378,6 +431,7 @@ async function processMessage(
   // Find or create conversation
   const conversation = await findOrCreateConversation(
     userId,
+    orgId,
     contactRecord.id
   )
   if (!conversation) return
@@ -479,6 +533,7 @@ async function processMessage(
       context: {
         message_text: inboundText,
         conversation_id: conversation.id,
+        input_type: inputType,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
@@ -491,6 +546,7 @@ async function parseMessageContent(
   contentText: string | null
   mediaUrl: string | null
   mediaType: string | null
+  inputType: 'text' | 'audio'
 }> {
   // getMediaUrl signature is (mediaId, accessToken) — earlier code had
   // the args swapped, so every verification hit an invalid Meta URL and
@@ -511,12 +567,16 @@ async function parseMessageContent(
     }
   }
 
+  const t = 'text' as const
+  const a = 'audio' as const
+
   switch (message.type) {
     case 'text':
       return {
         contentText: message.text?.body || null,
         mediaUrl: null,
         mediaType: null,
+        inputType: t,
       }
 
     case 'image':
@@ -525,9 +585,10 @@ async function parseMessageContent(
           contentText: message.image.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.image.id),
           mediaType: message.image.mime_type,
+          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
 
     case 'video':
       if (message.video?.id) {
@@ -535,43 +596,46 @@ async function parseMessageContent(
           contentText: message.video.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.video.id),
           mediaType: message.video.mime_type,
+          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
 
     case 'document':
       if (message.document?.id) {
         return {
-          contentText:
-            message.document.caption || message.document.filename || null,
+          contentText: message.document.caption || message.document.filename || null,
           mediaUrl: await verifyAndBuildUrl(message.document.id),
           mediaType: message.document.mime_type,
+          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
 
-    case 'audio':
-      if (message.audio?.id) {
-        return {
-          contentText: null,
-          mediaUrl: await verifyAndBuildUrl(message.audio.id),
-          mediaType: message.audio.mime_type,
-        }
+    case 'audio': {
+      // STT: transcribe the voice message so the AI can understand and reply
+      const transcript = message.audio?.id
+        ? await transcribeAudio(message.audio.id, message.audio.mime_type, accessToken)
+        : null
+      return {
+        contentText: transcript ?? '[voice message]',
+        mediaUrl: message.audio?.id ? await verifyAndBuildUrl(message.audio.id) : null,
+        mediaType: message.audio?.mime_type ?? null,
+        inputType: a,
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+    }
 
     case 'sticker':
-      // Stickers are images under the hood. Treat them as such so the
-      // MessageBubble renders the <img>. The caller maps the DB
-      // content_type to 'image' for the CHECK constraint.
+      // Stickers are images under the hood.
       if (message.sticker?.id) {
         return {
           contentText: null,
           mediaUrl: await verifyAndBuildUrl(message.sticker.id),
           mediaType: message.sticker.mime_type,
+          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
 
     case 'location':
       if (message.location) {
@@ -579,19 +643,16 @@ async function parseMessageContent(
         const locationText = [loc.name, loc.address, `${loc.latitude},${loc.longitude}`]
           .filter(Boolean)
           .join(' - ')
-        return {
-          contentText: locationText,
-          mediaUrl: null,
-          mediaType: null,
-        }
+        return { contentText: locationText, mediaUrl: null, mediaType: null, inputType: t }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null }
+      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
 
     case 'reaction':
       return {
         contentText: message.reaction?.emoji || null,
         mediaUrl: null,
         mediaType: null,
+        inputType: t,
       }
 
     default:
@@ -599,6 +660,7 @@ async function parseMessageContent(
         contentText: `[Unsupported message type: ${message.type}]`,
         mediaUrl: null,
         mediaType: null,
+        inputType: t,
       }
   }
 }
@@ -615,10 +677,10 @@ interface ContactOutcome {
 
 async function findOrCreateContact(
   userId: string,
+  orgId: string | null,
   phone: string,
   name: string
 ): Promise<ContactOutcome | null> {
-  // Look up existing contacts for this user
   const { data: contacts, error: contactsError } = await supabaseAdmin()
     .from('contacts')
     .select('*')
@@ -629,11 +691,9 @@ async function findOrCreateContact(
     return null
   }
 
-  // Use phonesMatch for flexible matching
   const existingContact = contacts?.find((c: ContactRow) => phonesMatch(c.phone, phone))
 
   if (existingContact) {
-    // Update name if it changed
     if (name && name !== existingContact.name) {
       await supabaseAdmin()
         .from('contacts')
@@ -643,11 +703,11 @@ async function findOrCreateContact(
     return { contact: existingContact, wasCreated: false }
   }
 
-  // Create new contact
   const { data: newContact, error: createError } = await supabaseAdmin()
     .from('contacts')
     .insert({
       user_id: userId,
+      ...(orgId ? { org_id: orgId } : {}),
       phone,
       name: name || phone,
     })
@@ -662,8 +722,7 @@ async function findOrCreateContact(
   return { contact: newContact, wasCreated: true }
 }
 
-async function findOrCreateConversation(userId: string, contactId: string) {
-  // Look for existing conversation
+async function findOrCreateConversation(userId: string, orgId: string | null, contactId: string) {
   const { data: existing, error: findError } = await supabaseAdmin()
     .from('conversations')
     .select('*')
@@ -675,11 +734,11 @@ async function findOrCreateConversation(userId: string, contactId: string) {
     return existing
   }
 
-  // Create new conversation
   const { data: newConv, error: createError } = await supabaseAdmin()
     .from('conversations')
     .insert({
       user_id: userId,
+      ...(orgId ? { org_id: orgId } : {}),
       contact_id: contactId,
     })
     .select()

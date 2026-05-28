@@ -1,4 +1,4 @@
-import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
+import { sendTextMessage, sendTemplateMessage, uploadMedia, sendAudioMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   sanitizePhoneForMeta,
@@ -165,4 +165,91 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     .eq('id', input.conversationId)
 
   return { whatsapp_message_id: waMessageId }
+}
+
+/**
+ * Convert text to speech via the wacrm-ai service, upload the audio to
+ * Meta, and send it as a voice message. Falls back to a text message if
+ * the AI service is unavailable so the conversation never goes silent.
+ */
+export async function engineSendAudio(args: {
+  userId: string
+  conversationId: string
+  contactId: string
+  text: string
+}): Promise<{ whatsapp_message_id: string; sent_as: 'audio' | 'text' }> {
+  const db = supabaseAdmin()
+
+  const { data: contact } = await db
+    .from('contacts')
+    .select('id, phone')
+    .eq('id', args.contactId)
+    .eq('user_id', args.userId)
+    .maybeSingle()
+  if (!contact?.phone) throw new Error('contact not found for this user')
+
+  const sanitized = sanitizePhoneForMeta(contact.phone)
+  if (!isValidE164(sanitized)) throw new Error(`contact phone invalid: ${contact.phone}`)
+
+  const { data: config } = await db
+    .from('whatsapp_config')
+    .select('*')
+    .eq('user_id', args.userId)
+    .single()
+  if (!config) throw new Error('WhatsApp not configured for this account')
+
+  const accessToken = decrypt(config.access_token)
+
+  // Try TTS → audio send
+  const aiServiceUrl = process.env.AI_SERVICE_URL ?? 'http://wacrm-ai:8001'
+  try {
+    const ttsRes = await fetch(`${aiServiceUrl}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: args.text }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!ttsRes.ok) throw new Error(`TTS ${ttsRes.status}`)
+
+    const audioBuffer = Buffer.from(await ttsRes.arrayBuffer())
+    const mediaId = await uploadMedia({
+      phoneNumberId: config.phone_number_id,
+      accessToken,
+      buffer: audioBuffer,
+      mimeType: 'audio/mpeg',
+    })
+    const { messageId } = await sendAudioMessage({
+      phoneNumberId: config.phone_number_id,
+      accessToken,
+      to: sanitized,
+      mediaId,
+    })
+
+    // Persist — content_text stores the transcript so agents can read it
+    await db.from('messages').insert({
+      conversation_id: args.conversationId,
+      sender_type: 'bot',
+      content_type: 'audio',
+      content_text: args.text,
+      message_id: messageId,
+      status: 'sent',
+    })
+    await db.from('conversations').update({
+      last_message_text: '🎤 Voice message',
+      last_message_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', args.conversationId)
+
+    return { whatsapp_message_id: messageId, sent_as: 'audio' }
+  } catch (err) {
+    // TTS failed — fall back to text so the lead still gets a reply
+    console.error('[engineSendAudio] TTS/upload failed, falling back to text:', err)
+    const { whatsapp_message_id } = await engineSendText({
+      userId: args.userId,
+      conversationId: args.conversationId,
+      contactId: args.contactId,
+      text: args.text,
+    })
+    return { whatsapp_message_id, sent_as: 'text' }
+  }
 }

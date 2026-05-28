@@ -219,3 +219,60 @@ export async function downloadMedia(
   const buffer = Buffer.from(await response.arrayBuffer())
   return { buffer, contentType }
 }
+
+/**
+ * Upload a binary media file to Meta and return the media_id.
+ * Used by the AI voice-reply flow to attach TTS audio before sending.
+ */
+export async function uploadMedia(args: {
+  phoneNumberId: string
+  accessToken: string
+  buffer: Buffer
+  mimeType: string
+  filename?: string
+}): Promise<string> {
+  const { phoneNumberId, accessToken, buffer, mimeType, filename = 'reply.mp3' } = args
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('type', mimeType)
+  form.append('file', new Blob([buffer], { type: mimeType }), filename)
+
+  const response = await fetch(`${META_API_BASE}/${phoneNumberId}/media`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form,
+  })
+  if (!response.ok) await throwMetaError(response, 'media upload failed')
+  const data = (await response.json()) as { id?: string }
+  if (!data.id) throw new Error('Meta media upload returned no id')
+  return data.id
+}
+
+/**
+ * Send an audio message using a previously uploaded media_id.
+ */
+export async function sendAudioMessage(args: {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  mediaId: string
+}): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, mediaId } = args
+  const response = await fetch(`${META_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'audio',
+      audio: { id: mediaId },
+    }),
+  })
+  if (!response.ok) await throwMetaError(response, 'send audio message failed')
+  const data = (await response.json()) as { messages?: Array<{ id: string }> }
+  return { messageId: data.messages?.[0]?.id ?? '' }
+}

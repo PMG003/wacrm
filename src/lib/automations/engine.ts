@@ -16,7 +16,7 @@ import type {
   AssignConversationStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
-import { engineSendText, engineSendTemplate } from './meta-send'
+import { engineSendText, engineSendTemplate, engineSendAudio } from './meta-send'
 import { generateAiReply } from './ai-provider'
 
 const DEFAULT_AI_SYSTEM_PROMPT = `You are Priya, a warm and knowledgeable real estate consultant at PMG Properties. You communicate via WhatsApp.
@@ -60,6 +60,8 @@ export interface AutomationContext {
   message_text?: string
   /** Conversation the event belongs to, if any. */
   conversation_id?: string
+  /** Whether the inbound message was voice — ai_reply will respond with audio. */
+  input_type?: 'text' | 'audio'
   /** Arbitrary variables accumulated during execution. */
   vars?: Record<string, unknown>
   /** The tag id that was added, for tag_added trigger. */
@@ -546,12 +548,20 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           : cfg.handover_message
       }
 
-      const { whatsapp_message_id } = await engineSendText({
-        userId: args.automation.user_id,
-        conversationId,
-        contactId: args.contactId,
-        text: replyText,
-      })
+      const isVoice = args.context.input_type === 'audio'
+      const { whatsapp_message_id, sent_as } = isVoice
+        ? await engineSendAudio({
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            text: replyText,
+          })
+        : { ...(await engineSendText({
+              userId: args.automation.user_id,
+              conversationId,
+              contactId: args.contactId,
+              text: replyText,
+            })), sent_as: 'text' as const }
 
       if (shouldHandover) {
         // Assign conversation to the account owner so inbox lights up
@@ -564,7 +574,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           .eq('id', conversationId)
       }
 
-      return `AI replied (${whatsapp_message_id})${shouldHandover ? ' + handed over to agent' : ''}`
+      return `AI ${sent_as} replied (${whatsapp_message_id})${shouldHandover ? ' + handed over to agent' : ''}`
     }
 
     default:
