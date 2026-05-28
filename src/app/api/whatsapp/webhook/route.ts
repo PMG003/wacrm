@@ -532,12 +532,6 @@ async function processMessage(
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
 
-  // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, inputType } = await parseMessageContent(
-    message,
-    accessToken
-  )
-
   // Find or create contact
   const contactOutcome = await findOrCreateContact(
     userId,
@@ -565,7 +559,7 @@ async function processMessage(
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
+  const { contentText, mediaUrl, mediaType, inputType, interactiveReplyId } =
     await parseMessageContent(message, accessToken)
 
   // Resolve swipe-reply context if present. A missing parent is fine —
