@@ -560,7 +560,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         const profileLines = profileNote.note_text
           .split('\n')
           .slice(1)
-          .filter(l => l.trim() && !l.startsWith('Updated:'))
+          .filter((l: string) => l.trim() && !l.startsWith('Updated:'))
           .join('\n')
         if (profileLines) {
           finalPrompt += `\n\nCONTACT HISTORY (from previous conversations):\n${profileLines}\nUse this context to avoid re-asking questions you already know the answer to.`
