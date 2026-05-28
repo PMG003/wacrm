@@ -20,6 +20,7 @@ import {
   GitBranch,
   Webhook,
   CircleSlash,
+  Bot,
   Zap,
   Loader2,
   ArrowDown,
@@ -88,6 +89,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-violet-500" },
   close_conversation: { label: "Close Conversation", icon: CircleSlash, border: "border-l-violet-500" },
+  ai_reply: { label: "AI Reply", icon: Bot, border: "border-l-emerald-500" },
 }
 
 const ADDABLE_STEPS: AutomationStepType[] = [
