@@ -19,37 +19,52 @@ import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate, engineSendAudio } from './meta-send'
 import { generateAiReply } from './ai-provider'
 
-const DEFAULT_AI_SYSTEM_PROMPT = `You are Priya, a warm and knowledgeable real estate consultant at PMG Properties. You communicate via WhatsApp.
+const DEFAULT_AI_SYSTEM_PROMPT = `You are Arjun, a sharp and results-driven real estate sales expert at PMG Properties. You communicate via WhatsApp.
 
-Your goal: have natural conversations that qualify leads and guide them toward finding the right property.
+Your mission: Qualify leads fast, build genuine interest, negotiate firmly, and close deals. Every message must move the conversation forward.
 
-HOW TO RESPOND:
-- Sound like a real person — warm, friendly, conversational. NEVER like a bot or script.
-- Keep WhatsApp messages short: 2–4 sentences max. No long walls of text.
-- Use 1–2 emojis per message for warmth, not more.
-- Ask ONE qualifying question at a time (property type → location → budget → timeline).
-- If you already know their need from the conversation, give helpful info directly.
-- Greet first-time contacts warmly by name if you know it.
+QUALIFICATION (work through these one at a time):
+- Need: Property type and BHK, purpose (own use / investment / rental income)
+- Budget: Get an exact number — not "affordable." Push: "What's your comfortable budget range?"
+- Area: Specific location preference, commute needs, neighborhood
+- Timeline: "Are you ready to move this month, this quarter, or still researching?"
 
-WHEN TO HAND OVER — end your message with [[HANDOVER]] when:
-- Lead asks to speak to someone / "call me" / "connect me to agent"
-- Lead is ready to visit a property or book an appointment
-- Lead wants specific unit availability, floor plans, or registration details
-- Lead has confirmed budget and property type and seems ready to move forward
-- After 5–6 exchanges and the lead is clearly interested
+HOW TO COMMUNICATE:
+- Direct and confident — not rude, but no filler or small talk.
+- WhatsApp messages: 2–4 sentences max. No walls of text.
+- Use the customer's name when you know it.
+- 1 emoji max per message — only when it genuinely adds warmth.
+- Always end with ONE question or a clear next step. Never leave it open-ended.
+- If they dodge a question, rephrase it sharper next message.
+
+NEGOTIATION RULES:
+- Never drop price on the first ask. Say "Let me check with our team" and come back with a counter.
+- Anchor high: mention premium options first, then show value in their target range.
+- Use real urgency only — limited inventory, known price revision timelines. Never invent it.
+- If they say "too expensive": "I understand — what's the maximum you can stretch to? Let me see what fits."
+- If they say "I'll think about it": "Of course — what's the one concern holding you back right now?"
+- If they mention a competitor property: acknowledge briefly, then pivot to your advantage (RERA, loan tie-ups, track record).
+- No commitments you cannot guarantee. No fake scarcity. No invented delivery dates.
+
+HANDOVER TRIGGERS — end your response with [[HANDOVER]] when:
+- Lead asks to speak to an agent, requests a call, or wants a site visit
+- Lead confirms budget AND property type AND asks about next steps
+- Lead is actively negotiating a specific unit or price
+- Lead mentions a competing project — escalate immediately
+- After 6+ exchanges with a clearly warm lead who hasn't yet booked a visit
 
 PMG PROPERTIES PORTFOLIO:
 - 1BHK Flats: ₹25L–₹40L | 2BHK: ₹45L–₹75L | 3BHK: ₹80L–₹1.2Cr | 4BHK Luxury: ₹1.5Cr+
 - Villas: 3BHK ₹1.2Cr–₹1.8Cr | 4BHK ₹1.8Cr–₹2.5Cr | 5BHK Luxury Bungalow ₹3Cr+
 - Plots from ₹15L | Commercial spaces from ₹30L
-- All projects are RERA registered
-- Home loans: up to 90% financing, EMI from ₹8,000/month, 15+ bank partners
+- All RERA registered | Home loans: up to 90% financing, 15+ bank partners, EMI from ₹8,000/month
 
 NEVER:
-- Say you are an AI, bot, or automated system
-- Make up project names, exact addresses, or specific unit details not listed above
+- Admit you are an AI, bot, or automated system
+- Invent project names, exact unit numbers, floor plans, or delivery dates not listed above
 - Send more than 4 sentences in a single message
-- Ask multiple questions at once`
+- Give a discount without the "let me check with management" step first
+- Make fake commitments or manufactured scarcity`
 
 // ------------------------------------------------------------
 // Public API
@@ -492,6 +507,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         .eq('id', args.contactId)
         .maybeSingle()
 
+      // Fetch existing AI lead profile note for memory injection
+      const { data: profileNote } = await db
+        .from('contact_notes')
+        .select('id, note_text')
+        .eq('contact_id', args.contactId)
+        .like('note_text', '[AI Lead Profile]%')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
       // Fetch recent conversation messages
       const { data: recentMessages } = await db
         .from('messages')
@@ -524,11 +549,23 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
       const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
 
-      // Inject contact name into system prompt if known
+      // Inject contact name and existing lead profile into system prompt
       const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null
-      const finalPrompt = contactName
-        ? `${systemPrompt}\n\nThe customer's name is ${contactName}.`
-        : systemPrompt
+      let finalPrompt = systemPrompt
+      if (contactName) {
+        finalPrompt += `\n\nThe customer's name is ${contactName}.`
+      }
+      if (profileNote?.note_text) {
+        // Strip the "[AI Lead Profile]" header line, keep the key-value lines
+        const profileLines = profileNote.note_text
+          .split('\n')
+          .slice(1)
+          .filter(l => l.trim() && !l.startsWith('Updated:'))
+          .join('\n')
+        if (profileLines) {
+          finalPrompt += `\n\nCONTACT HISTORY (from previous conversations):\n${profileLines}\nUse this context to avoid re-asking questions you already know the answer to.`
+        }
+      }
 
       // Prepend system prompt as first message for providers that support it
       const messagesWithSystem = [
@@ -573,6 +610,15 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           })
           .eq('id', conversationId)
       }
+
+      // Fire-and-forget: extract and persist lead profile for future conversations
+      saveLeadProfile({
+        db,
+        contactId: args.contactId,
+        userId: args.automation.user_id,
+        existingNoteId: profileNote?.id ?? null,
+        messages: merged,
+      }).catch(err => console.error('[ai_reply] profile save failed:', err))
 
       return `AI ${sent_as} replied (${whatsapp_message_id})${shouldHandover ? ' + handed over to agent' : ''}`
     }
@@ -724,4 +770,68 @@ async function markPending(id: string, status: 'done' | 'failed') {
     .from('automation_pending_executions')
     .update({ status })
     .eq('id', id)
+}
+
+// ------------------------------------------------------------
+// Contact memory helpers
+// ------------------------------------------------------------
+
+function extractLeadProfile(messages: { role: string; content: string }[]): Record<string, string> {
+  const allText = messages.map(m => m.content).join(' ')
+  const lower = allText.toLowerCase()
+  const profile: Record<string, string> = {}
+
+  // Budget — prefer budget-context matches, fall back to bare ₹X amounts
+  const budgetCtx = [...lower.matchAll(
+    /(?:budget|afford|spend|range|up\s*to|maximum|max)[^.!?]{0,40}?(\d+(?:\.\d+)?\s*(?:cr(?:ore)?s?|lakh[s]?|l\b))/gi
+  )]
+  if (budgetCtx.length > 0) {
+    profile.budget = budgetCtx[budgetCtx.length - 1][1].trim()
+  } else {
+    const bare = [...lower.matchAll(/₹\s*(\d+(?:\.\d+)?\s*(?:cr(?:ore)?s?|lakh[s]?|l\b))/gi)]
+    if (bare.length > 0) profile.budget = bare[bare.length - 1][1].trim()
+  }
+
+  // Property type — take the last mention
+  const typeMatches = [...lower.matchAll(/(\d\s*bhk|villa|plots?|commercial\s*space|flat|apartment|bungalow|penthouse)/gi)]
+  if (typeMatches.length > 0) profile.property_type = typeMatches[typeMatches.length - 1][1].trim()
+
+  // Timeline — take the last mention
+  const timelineMatches = [...lower.matchAll(
+    /(immediately|urgent|asap|this\s*month|this\s*year|next\s*month|next\s*year|\d+\s*months?|one\s*year|just\s*exploring|still\s*exploring|no\s*rush)/gi
+  )]
+  if (timelineMatches.length > 0) profile.timeline = timelineMatches[timelineMatches.length - 1][1].trim()
+
+  // Purpose — take the last mention
+  const purposeMatches = [...lower.matchAll(
+    /(investment|rental\s*income|own\s*use|self[\s-]use|end[\s-]user|to\s*stay|to\s*live|personal\s*use)/gi
+  )]
+  if (purposeMatches.length > 0) profile.purpose = purposeMatches[purposeMatches.length - 1][1].trim()
+
+  return profile
+}
+
+async function saveLeadProfile(args: {
+  db: ReturnType<typeof supabaseAdmin>
+  contactId: string
+  userId: string
+  existingNoteId: string | null
+  messages: { role: string; content: string }[]
+}): Promise<void> {
+  const { db, contactId, userId, existingNoteId, messages } = args
+  const profile = extractLeadProfile(messages)
+  if (Object.keys(profile).length === 0) return
+
+  const lines = ['[AI Lead Profile]']
+  if (profile.property_type) lines.push(`Property Type: ${profile.property_type}`)
+  if (profile.budget) lines.push(`Budget: ${profile.budget}`)
+  if (profile.purpose) lines.push(`Purpose: ${profile.purpose}`)
+  if (profile.timeline) lines.push(`Timeline: ${profile.timeline}`)
+  lines.push(`Updated: ${new Date().toISOString().split('T')[0]}`)
+  const noteText = lines.join('\n')
+
+  if (existingNoteId) {
+    await db.from('contact_notes').delete().eq('id', existingNoteId)
+  }
+  await db.from('contact_notes').insert({ contact_id: contactId, user_id: userId, note_text: noteText })
 }
