@@ -235,7 +235,7 @@ export async function uploadMedia(args: {
   const form = new FormData()
   form.append('messaging_product', 'whatsapp')
   form.append('type', mimeType)
-  form.append('file', new Blob([buffer], { type: mimeType }), filename)
+  form.append('file', new Blob([new Uint8Array(buffer)], { type: mimeType }), filename)
 
   const response = await fetch(`${META_API_BASE}/${phoneNumberId}/media`, {
     method: 'POST',

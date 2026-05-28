@@ -15,7 +15,7 @@ async function transcribeAudio(
     const { buffer } = await downloadMedia({ downloadUrl: url, accessToken })
     const form = new FormData()
     const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mpeg') ? 'mp3' : 'ogg'
-    form.append('audio', new Blob([buffer], { type: mimeType }), `voice.${ext}`)
+    form.append('audio', new Blob([new Uint8Array(buffer)], { type: mimeType }), `voice.${ext}`)
     const res = await fetch(`${aiServiceUrl}/stt`, {
       method: 'POST',
       body: form,
