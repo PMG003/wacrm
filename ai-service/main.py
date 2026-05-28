@@ -49,7 +49,6 @@ async def speech_to_text(audio: UploadFile = File(...)):
         model = get_whisper()
         segments, info = model.transcribe(
             tmp_path,
-            language="en",
             beam_size=1,
             vad_filter=True,
         )
@@ -64,17 +63,29 @@ async def speech_to_text(audio: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 # TTS  (gTTS — Google Translate TTS, free, works on VPS, no API key)
 # ---------------------------------------------------------------------------
+# Languages gTTS supports well; anything else falls back to English
+GTTS_SUPPORTED = {
+    'hi', 'mr', 'ta', 'te', 'kn', 'bn', 'gu', 'pa', 'ml', 'ur',  # Indic
+    'en', 'fr', 'de', 'es', 'pt', 'ar', 'zh', 'ja', 'ko',         # others
+}
+
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "en"   # BCP-47 language code; "en" with tld="co.in" = Indian accent
+    voice: str = "en"   # ISO 639-1 language code returned by Whisper
 
 @app.post("/tts")
 async def text_to_speech(req: TTSRequest):
     """Convert text to speech. Returns audio/mpeg bytes."""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text is empty")
+    # Normalise 'hi-IN' → 'hi', unknown → 'en'
+    lang = req.voice.lower().split('-')[0]
+    if lang not in GTTS_SUPPORTED:
+        lang = 'en'
+    # Indian English accent for English, standard for other languages
+    tld = "co.in" if lang == "en" else "com"
     try:
-        tts = gTTS(text=req.text, lang="en", tld="co.in", slow=False)
+        tts = gTTS(text=req.text, lang=lang, tld=tld, slow=False)
         buf = io.BytesIO()
         tts.write_to_fp(buf)
         audio_bytes = buf.getvalue()

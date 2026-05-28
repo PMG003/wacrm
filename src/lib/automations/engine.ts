@@ -77,6 +77,8 @@ export interface AutomationContext {
   conversation_id?: string
   /** Whether the inbound message was voice — ai_reply will respond with audio. */
   input_type?: 'text' | 'audio'
+  /** ISO 639-1 language code detected by Whisper (e.g. "hi", "en", "ta"). */
+  input_language?: string
   /** Arbitrary variables accumulated during execution. */
   vars?: Record<string, unknown>
   /** The tag id that was added, for tag_added trigger. */
@@ -549,11 +551,15 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
       const systemPrompt = cfg.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT
 
-      // Inject contact name and existing lead profile into system prompt
+      // Inject contact name, language, and existing lead profile into system prompt
       const contactName = contact?.name && contact.name !== contact?.phone ? contact.name : null
+      const detectedLang = args.context.input_language ?? 'en'
       let finalPrompt = systemPrompt
       if (contactName) {
         finalPrompt += `\n\nThe customer's name is ${contactName}.`
+      }
+      if (detectedLang !== 'en') {
+        finalPrompt += `\n\nIMPORTANT: The customer is communicating in language code "${detectedLang}". You MUST reply in that same language. Do not switch to English.`
       }
       if (profileNote?.note_text) {
         // Strip the "[AI Lead Profile]" header line, keep the key-value lines
@@ -598,6 +604,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           conversationId,
           contactId: args.contactId,
           text: replyText,
+          voice: detectedLang,
         })
         whatsapp_message_id = audioResult.whatsapp_message_id
         sent_as = audioResult.sent_as

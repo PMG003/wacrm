@@ -177,6 +177,8 @@ export async function engineSendAudio(args: {
   conversationId: string
   contactId: string
   text: string
+  /** ISO 639-1 language code to pass to TTS (e.g. "hi", "en"). Defaults to "en". */
+  voice?: string
 }): Promise<{ whatsapp_message_id: string; sent_as: 'audio' | 'text' }> {
   const db = supabaseAdmin()
 
@@ -206,7 +208,7 @@ export async function engineSendAudio(args: {
     const ttsRes = await fetch(`${aiServiceUrl}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: args.text }),
+      body: JSON.stringify({ text: args.text, voice: args.voice ?? 'en' }),
       signal: AbortSignal.timeout(30_000),
     })
     if (!ttsRes.ok) throw new Error(`TTS ${ttsRes.status}`)

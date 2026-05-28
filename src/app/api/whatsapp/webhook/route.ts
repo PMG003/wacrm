@@ -7,7 +7,7 @@ async function transcribeAudio(
   mediaId: string,
   mimeType: string,
   accessToken: string,
-): Promise<string | null> {
+): Promise<{ text: string; language: string } | null> {
   const aiServiceUrl = process.env.AI_SERVICE_URL
   if (!aiServiceUrl) return null
   try {
@@ -22,8 +22,10 @@ async function transcribeAudio(
       signal: AbortSignal.timeout(30_000),
     })
     if (!res.ok) return null
-    const data = (await res.json()) as { text?: string }
-    return data.text?.trim() || null
+    const data = (await res.json()) as { text?: string; language?: string }
+    const text = data.text?.trim()
+    if (!text) return null
+    return { text, language: data.language ?? 'en' }
   } catch (err) {
     console.error('[STT] transcription failed:', err)
     return null
@@ -559,7 +561,7 @@ async function processMessage(
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, inputType, interactiveReplyId } =
+  const { contentText, mediaUrl, mediaType, inputType, detectedLanguage, interactiveReplyId } =
     await parseMessageContent(message, accessToken)
 
   // Resolve swipe-reply context if present. A missing parent is fine —
@@ -728,6 +730,7 @@ async function processMessage(
         message_text: inboundText,
         conversation_id: conversation.id,
         input_type: inputType,
+        input_language: detectedLanguage,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
@@ -741,6 +744,8 @@ async function parseMessageContent(
   mediaUrl: string | null
   mediaType: string | null
   inputType: 'text' | 'audio'
+  /** ISO 639-1 language code detected by Whisper (audio messages only). */
+  detectedLanguage: string
   /**
    * For interactive button / list replies: the stable id of the tapped
    * option. Used by the Flows engine to advance the per-contact run.
@@ -773,6 +778,7 @@ async function parseMessageContent(
     mediaUrl: null,
     mediaType: null,
     inputType: 'text' as const,
+    detectedLanguage: 'en',
     interactiveReplyId: null,
   }
 
@@ -815,15 +821,16 @@ async function parseMessageContent(
 
     case 'audio': {
       // STT: transcribe the voice message so the AI can understand and reply
-      const transcript = message.audio?.id
+      const sttResult = message.audio?.id
         ? await transcribeAudio(message.audio.id, message.audio.mime_type, accessToken)
         : null
       return {
         ...empty,
-        contentText: transcript ?? '[voice message]',
+        contentText: sttResult?.text ?? '[voice message]',
         mediaUrl: message.audio?.id ? await verifyAndBuildUrl(message.audio.id) : null,
         mediaType: message.audio?.mime_type ?? null,
         inputType: 'audio' as const,
+        detectedLanguage: sttResult?.language ?? 'en',
       }
     }
 
