@@ -125,7 +125,7 @@ async def _sarvam_tts(text: str, lang: str) -> Response:
                 "loudness": 1.5,
                 "speech_sample_rate": 8000,
                 "enable_preprocessing": True,
-                "model": "bulbul:v1",
+                "model": "bulbul:v2",
             },
             timeout=30.0,
         )
