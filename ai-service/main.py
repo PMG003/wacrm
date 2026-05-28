@@ -119,7 +119,7 @@ async def _sarvam_tts(text: str, lang: str) -> Response:
             json={
                 "inputs": [text],
                 "target_language_code": sarvam_lang,
-                "speaker": "meera",
+                "speaker": "anushka",
                 "pitch": 0,
                 "pace": 1.1,
                 "loudness": 1.5,
