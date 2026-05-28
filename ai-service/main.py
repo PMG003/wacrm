@@ -56,6 +56,7 @@ async def speech_to_text(audio: UploadFile = File(...)):
             vad_filter=True,
         )
         text = " ".join(s.text.strip() for s in segments).strip()
+        print(f"[STT] detected language: {info.language} (confidence: {info.language_probability:.2f})")
         return {"text": text, "language": info.language}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

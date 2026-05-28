@@ -614,8 +614,8 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       }
       if (isVoice) {
         finalPrompt += `\n\nVOICE RESPONSE FORMAT: Your reply MUST have exactly two labelled sections:
-[VOICE]: 2–3 short conversational sentences in the customer's language. This will be spoken aloud — keep it natural and brief.
-[DETAILS]: If you mentioned any specific property (price, BHK, location, amenities), list the key details in clean readable text here. This will be sent as a WhatsApp text card. Write NONE if no property details apply.`
+[VOICE]: 2–3 short conversational sentences in the customer's language (${langName ?? 'English'}). This will be spoken aloud — keep it natural and brief.
+[DETAILS]: ALWAYS write this section in ENGLISH only, regardless of the customer's language. If you mentioned any specific property (price, BHK, location, amenities), list the key details as a clean WhatsApp text card. Write NONE if no property details apply.`
       }
 
       const messagesWithSystem = [
