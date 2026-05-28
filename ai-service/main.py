@@ -8,10 +8,13 @@ Endpoints
   GET  /health → {"status":"ok"}
 """
 
+import base64
 import io
 import os
+import subprocess
 import tempfile
 
+import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -63,11 +66,17 @@ async def speech_to_text(audio: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 # TTS  (gTTS — Google Translate TTS, free, works on VPS, no API key)
 # ---------------------------------------------------------------------------
-# Languages gTTS supports well; anything else falls back to English
-GTTS_SUPPORTED = {
-    'hi', 'mr', 'ta', 'te', 'kn', 'bn', 'gu', 'pa', 'ml', 'ur',  # Indic
-    'en', 'fr', 'de', 'es', 'pt', 'ar', 'zh', 'ja', 'ko',         # others
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
+
+# Indic languages → Sarvam AI (female meera voice, best quality)
+SARVAM_LANG_MAP = {
+    'hi': 'hi-IN', 'mr': 'mr-IN', 'ta': 'ta-IN',
+    'te': 'te-IN', 'kn': 'kn-IN', 'bn': 'bn-IN',
+    'gu': 'gu-IN', 'pa': 'pa-IN', 'ml': 'ml-IN',
 }
+
+# Non-Indic languages gTTS handles well
+GTTS_SUPPORTED = {'en', 'fr', 'de', 'es', 'pt', 'ar', 'zh', 'ja', 'ko'}
 
 class TTSRequest(BaseModel):
     text: str
@@ -78,20 +87,67 @@ async def text_to_speech(req: TTSRequest):
     """Convert text to speech. Returns audio/mpeg bytes."""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text is empty")
-    # Normalise 'hi-IN' → 'hi', unknown → 'en'
-    lang = req.voice.lower().split('-')[0]
+    lang = req.voice.lower().split('-')[0]  # 'hi-IN' → 'hi'
+
+    # Route Indic languages to Sarvam AI for a natural female voice
+    if lang in SARVAM_LANG_MAP and SARVAM_API_KEY:
+        try:
+            return await _sarvam_tts(req.text, lang)
+        except Exception as err:
+            print(f"[TTS] Sarvam failed ({err}), falling back to gTTS")
+
+    # Fallback: gTTS for English and other languages
     if lang not in GTTS_SUPPORTED:
         lang = 'en'
-    # Indian English accent for English, standard for other languages
     tld = "co.in" if lang == "en" else "com"
     try:
         tts = gTTS(text=req.text, lang=lang, tld=tld, slow=False)
         buf = io.BytesIO()
         tts.write_to_fp(buf)
-        audio_bytes = buf.getvalue()
-        return Response(content=audio_bytes, media_type="audio/mpeg")
+        return Response(content=buf.getvalue(), media_type="audio/mpeg")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+async def _sarvam_tts(text: str, lang: str) -> Response:
+    """Sarvam AI TTS — natural Indian female voice (meera). Returns audio/mpeg."""
+    sarvam_lang = SARVAM_LANG_MAP[lang]
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.sarvam.ai/text-to-speech",
+            headers={"api-subscription-key": SARVAM_API_KEY},
+            json={
+                "inputs": [text],
+                "target_language_code": sarvam_lang,
+                "speaker": "meera",
+                "pitch": 0,
+                "pace": 1.1,
+                "loudness": 1.5,
+                "speech_sample_rate": 8000,
+                "enable_preprocessing": True,
+                "model": "bulbul:v1",
+            },
+            timeout=30.0,
+        )
+    resp.raise_for_status()
+    wav_bytes = base64.b64decode(resp.json()["audios"][0])
+
+    # Sarvam returns WAV — convert to MP3 via ffmpeg (already in container for whisper)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wf:
+        wf.write(wav_bytes)
+        wav_path = wf.name
+    mp3_path = wav_path.replace(".wav", ".mp3")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", wav_path, "-codec:a", "libmp3lame", "-q:a", "4", mp3_path],
+            check=True, capture_output=True,
+        )
+        with open(mp3_path, "rb") as f:
+            return Response(content=f.read(), media_type="audio/mpeg")
+    finally:
+        os.unlink(wav_path)
+        if os.path.exists(mp3_path):
+            os.unlink(mp3_path)
 
 
 # ---------------------------------------------------------------------------
