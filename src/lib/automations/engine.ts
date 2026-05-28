@@ -601,13 +601,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         })
         whatsapp_message_id = audioResult.whatsapp_message_id
         sent_as = audioResult.sent_as
-        // Fire-and-forget text follow-up — if it fails the voice already arrived
-        engineSendText({
-          userId: args.automation.user_id,
-          conversationId,
-          contactId: args.contactId,
-          text: replyText,
-        }).catch(err => console.error('[ai_reply] voice follow-up text failed:', err))
+        // Only send text follow-up if audio actually went out — if engineSendAudio
+        // already fell back to text internally, sending again would duplicate it.
+        if (sent_as === 'audio') {
+          engineSendText({
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            text: replyText,
+          }).catch(err => console.error('[ai_reply] voice follow-up text failed:', err))
+        }
       } else {
         const textResult = await engineSendText({
           userId: args.automation.user_id,
