@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { ArrowLeft, Send, Clock, Loader2, Users, Lock, Save } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, Users, Save } from 'lucide-react';
 
 interface AudienceConfig {
   type: string;
@@ -45,7 +45,6 @@ export function Step4ScheduleSend({
   isProcessing,
   progress,
 }: Step4Props) {
-  const [timing, setTiming] = useState<'now' | 'later'>('now');
   const [showConfirm, setShowConfirm] = useState(false);
   const [estimatedReach, setEstimatedReach] = useState<number>(0);
   const [loadingReach, setLoadingReach] = useState(true);
@@ -127,10 +126,10 @@ export function Step4ScheduleSend({
             <p className="text-xs text-slate-400">Estimated Reach</p>
             <div className="flex items-center gap-1.5">
               {loadingReach ? (
-                <Loader2 className="h-3 w-3 animate-spin text-violet-500" />
+                <Loader2 className="h-3 w-3 animate-spin text-primary" />
               ) : (
                 <>
-                  <Users className="h-3.5 w-3.5 text-violet-400" />
+                  <Users className="h-3.5 w-3.5 text-primary" />
                   <p className="font-medium text-white">{estimatedReach.toLocaleString()}</p>
                 </>
               )}
@@ -143,54 +142,19 @@ export function Step4ScheduleSend({
         </div>
       </div>
 
-      {/* Delivery Timing */}
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-white">Delivery Timing</p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <button
-            onClick={() => setTiming('now')}
-            className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
-              timing === 'now'
-                ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
-                : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'
-            }`}
-          >
-            <Send className={`mt-0.5 h-4 w-4 ${timing === 'now' ? 'text-violet-400' : 'text-slate-400'}`} />
-            <div>
-              <p className="text-sm font-medium text-white">Send Immediately</p>
-              <p className="mt-0.5 text-xs text-slate-400">Start sending right away</p>
-            </div>
-          </button>
-
-          <div className="relative flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/30 p-4 opacity-60">
-            <Clock className="mt-0.5 h-4 w-4 text-slate-500" />
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-slate-400">Schedule for Later</p>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-400">
-                  <Lock className="h-2.5 w-2.5" />
-                  Pro
-                </span>
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500">Pick a date and time</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Processing overlay */}
       {isProcessing && (
-        <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
               <p className="text-sm font-medium text-white">Sending broadcast...</p>
             </div>
-            <span className="text-xs font-medium text-violet-400">{progress}%</span>
+            <span className="text-xs font-medium text-primary">{progress}%</span>
           </div>
           <div className="h-1.5 w-full rounded-full bg-slate-800">
             <div
-              className="h-1.5 rounded-full bg-violet-500 transition-all duration-300"
+              className="h-1.5 rounded-full bg-primary transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -226,7 +190,7 @@ export function Step4ScheduleSend({
             render={
               <Button
                 disabled={!name.trim() || isProcessing}
-                className="bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               />
             }
           >
@@ -257,7 +221,7 @@ export function Step4ScheduleSend({
                   setShowConfirm(false);
                   onSend();
                 }}
-                className="bg-violet-600 text-white hover:bg-violet-700"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 <Send className="h-4 w-4" />
                 Confirm & Send

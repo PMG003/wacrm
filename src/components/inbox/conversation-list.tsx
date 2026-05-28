@@ -21,10 +21,17 @@ interface ConversationListProps {
   onSelect: (conversation: Conversation) => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
+  /**
+   * Increment to force the fetch effect below to refire. The parent
+   * bumps this on realtime reconnect / tab visibility → visible so the
+   * list catches up on any events sent while the WS was disconnected
+   * or the tab was throttled. Optional so existing callers keep working.
+   */
+  resyncToken?: number;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-violet-500",
+  open: "bg-primary",
   pending: "bg-amber-500",
   closed: "bg-slate-500",
 };
@@ -41,6 +48,7 @@ export function ConversationList({
   onSelect,
   conversations,
   onConversationsLoaded,
+  resyncToken = 0,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ConversationStatus | "all">("all");
@@ -94,7 +102,10 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-  }, []);
+    // `resyncToken` is included so the parent can force a refetch when
+    // the realtime channel reconnects or the tab regains focus — catches
+    // up on any events sent while the WS was disconnected or throttled.
+  }, [resyncToken]);
 
   const filtered = useMemo(() => {
     let result = conversations;
@@ -145,7 +156,7 @@ export function ConversationList({
             value={search}
             onChange={handleSearchChange}
             placeholder="Search conversations..."
-            className="border-slate-700 bg-slate-800 pl-9 text-sm text-white placeholder-slate-500 focus:border-violet-500/50"
+            className="border-slate-700 bg-slate-800 pl-9 text-sm text-white placeholder-slate-500 focus:border-primary/50"
           />
         </div>
 
@@ -165,7 +176,7 @@ export function ConversationList({
                 className={cn(
                   "text-sm",
                   filter === opt.value
-                    ? "text-violet-400"
+                    ? "text-primary"
                     : "text-slate-300"
                 )}
               >
@@ -180,7 +191,7 @@ export function ConversationList({
       <ScrollArea className="flex-1">
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
@@ -233,7 +244,7 @@ function ConversationItem({
       onClick={handleClick}
       className={cn(
         "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-slate-800/50",
-        isActive && "border-l-2 border-violet-500 bg-slate-800/70"
+        isActive && "border-l-2 border-primary bg-slate-800/70"
       )}
     >
       {/* Avatar */}
@@ -263,7 +274,7 @@ function ConversationItem({
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.unread_count > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold text-white">
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
                 {conversation.unread_count}
               </span>
             )}

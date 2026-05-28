@@ -5,6 +5,14 @@ export interface Profile {
   email: string;
   avatar_url?: string;
   role: string;
+  /**
+   * Opted-in beta feature keys for this account. The column survives
+   * for future beta gates; no current feature reads it (Flows was
+   * the last user and went to soft-GA in PR #134). Defaults to `[]`
+   * for every profile; toggled per-account via a direct UPDATE on
+   * the `profiles` row.
+   */
+  beta_features?: string[];
   created_at: string;
 }
 
@@ -75,7 +83,16 @@ export interface Conversation {
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';
-export type ContentType = 'text' | 'image' | 'document' | 'audio' | 'video' | 'location' | 'template';
+export type ContentType =
+  | 'text'
+  | 'image'
+  | 'document'
+  | 'audio'
+  | 'video'
+  | 'location'
+  | 'template'
+  /** Customer tapped a reply button or list row on a message we sent. */
+  | 'interactive';
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface Message {
@@ -89,6 +106,26 @@ export interface Message {
   template_name?: string;
   message_id?: string;
   status: MessageStatus;
+  created_at: string;
+  reply_to_message_id?: string;
+  /**
+   * Only set when `content_type === 'interactive'` — the stable id of
+   * the button or list row the customer tapped. The Flows engine uses
+   * this to route the next node; the inbox bubble uses it as a styling
+   * cue (renders with a "↩ button reply" affordance).
+   */
+  interactive_reply_id?: string;
+}
+
+export type ReactionActor = 'customer' | 'agent';
+
+export interface MessageReaction {
+  id: string;
+  message_id: string;
+  conversation_id: string;
+  actor_type: ReactionActor;
+  actor_id?: string;
+  emoji: string;
   created_at: string;
 }
 

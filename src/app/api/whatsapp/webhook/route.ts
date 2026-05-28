@@ -32,6 +32,7 @@ async function transcribeAudio(
 import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { dispatchInboundToFlows } from '@/lib/flows/engine'
 
 // Lazy-initialized to avoid build-time crash when env vars are missing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,6 +60,19 @@ interface WhatsAppMessage {
   sticker?: { id: string; mime_type: string }
   location?: { latitude: number; longitude: number; name?: string; address?: string }
   reaction?: { message_id: string; emoji: string }
+  /**
+   * Set when the customer taps a button or list row on an interactive
+   * message we sent. `button_reply.id` / `list_reply.id` is whatever id
+   * we put on the button/row when sending — the Flows engine uses this
+   * to advance the per-contact run.
+   */
+  interactive?: {
+    type: 'button_reply' | 'list_reply'
+    button_reply?: { id: string; title: string }
+    list_reply?: { id: string; title: string; description?: string }
+  }
+  /** Present when the customer swipe-replies to one of our messages. */
+  context?: { id: string }
 }
 
 interface WhatsAppWebhookEntry {
@@ -225,17 +239,42 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       const phoneNumberId = value.metadata.phone_number_id
       console.log('[webhook] inbound message on phone_number_id:', phoneNumberId)
 
-      // Find user's config by phone_number_id
-      const { data: config, error: configError } = await supabaseAdmin()
+      // Find user's config by phone_number_id. `.single()` returns
+      // PGRST116 for both 0 rows AND ≥2 rows — distinguish them so
+      // operators see the real cause in logs. ≥2 rows shouldn't happen
+      // post-migration 013 (UNIQUE constraint), but a row created
+      // before the constraint, or a race, would still surface here.
+      const { data: configRows, error: configError } = await supabaseAdmin()
         .from('whatsapp_config')
         .select('*')
         .eq('phone_number_id', phoneNumberId)
-        .single()
 
-      if (configError || !config) {
+      if (configError) {
+        console.error(
+          'Error fetching whatsapp_config for phone_number_id:',
+          phoneNumberId,
+          configError
+        )
+        continue
+      }
+
+      if (!configRows || configRows.length === 0) {
         console.error('[webhook] no config found for phone_number_id:', phoneNumberId, '— save real credentials in Settings → WhatsApp')
         continue
       }
+
+      if (configRows.length > 1) {
+        console.error(
+          `Multiple configs (${configRows.length}) found for phone_number_id:`,
+          phoneNumberId,
+          '— inbound message dropped. Resolve duplicates so each number maps to a single user.',
+          'Owners:',
+          configRows.map((r: { user_id: string }) => r.user_id)
+        )
+        continue
+      }
+
+      const config = configRows[0]
 
       const decryptedAccessToken = decrypt(config.access_token)
 
@@ -402,6 +441,87 @@ async function flagBroadcastReplyIfAny(userId: string, contactId: string) {
   }
 }
 
+/**
+ * Resolve a Meta-side message_id into the matching internal UUID, scoped
+ * to one conversation. Returns null when we never received the parent
+ * (e.g. a swipe-reply to a message older than this CRM install).
+ */
+async function lookupInternalIdByMetaId(
+  metaId: string,
+  conversationId: string
+): Promise<string | null> {
+  const { data, error } = await supabaseAdmin()
+    .from('messages')
+    .select('id')
+    .eq('message_id', metaId)
+    .eq('conversation_id', conversationId)
+    .maybeSingle()
+  if (error) {
+    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message)
+    return null
+  }
+  return data?.id ?? null
+}
+
+/**
+ * Persist an inbound reaction. WhatsApp reactions are not new messages —
+ * they're per-(target, actor) state. We upsert / delete on
+ * `message_reactions`, never write a row into `messages`.
+ *
+ * Best-effort: a missing parent (we never received it) is logged and
+ * skipped so the webhook still acks 200 to Meta.
+ */
+async function handleReaction(
+  message: WhatsAppMessage,
+  conversationId: string,
+  contactId: string
+) {
+  const reaction = message.reaction
+  if (!reaction?.message_id) return
+
+  const targetInternalId = await lookupInternalIdByMetaId(
+    reaction.message_id,
+    conversationId
+  )
+  if (!targetInternalId) {
+    console.warn(
+      '[webhook] reaction target message not found; skipping',
+      reaction.message_id
+    )
+    return
+  }
+
+  // Empty emoji = removal (per Meta's Cloud API spec).
+  if (!reaction.emoji) {
+    const { error: delError } = await supabaseAdmin()
+      .from('message_reactions')
+      .delete()
+      .eq('message_id', targetInternalId)
+      .eq('actor_type', 'customer')
+      .eq('actor_id', contactId)
+    if (delError) {
+      console.error('[webhook] reaction delete failed:', delError.message)
+    }
+    return
+  }
+
+  const { error: upsertError } = await supabaseAdmin()
+    .from('message_reactions')
+    .upsert(
+      {
+        message_id: targetInternalId,
+        conversation_id: conversationId,
+        actor_type: 'customer',
+        actor_id: contactId,
+        emoji: reaction.emoji,
+      },
+      { onConflict: 'message_id,actor_type,actor_id' }
+    )
+  if (upsertError) {
+    console.error('[webhook] reaction upsert failed:', upsertError.message)
+  }
+}
+
 async function processMessage(
   message: WhatsAppMessage,
   contact: { profile: { name: string }; wa_id: string },
@@ -436,6 +556,34 @@ async function processMessage(
   )
   if (!conversation) return
 
+  // Reactions short-circuit here — they aren't messages. We never insert
+  // into `messages`, never bump unread_count, never update last_message_text.
+  // Done before parseMessageContent so the media-URL fetch is skipped.
+  if (message.type === 'reaction') {
+    await handleReaction(message, conversation.id, contactRecord.id)
+    return
+  }
+
+  // Parse message content based on type
+  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
+    await parseMessageContent(message, accessToken)
+
+  // Resolve swipe-reply context if present. A missing parent is fine —
+  // we just store NULL and the UI renders the message without a quote.
+  let replyToInternalId: string | null = null
+  if (message.context?.id) {
+    replyToInternalId = await lookupInternalIdByMetaId(
+      message.context.id,
+      conversation.id
+    )
+    if (!replyToInternalId) {
+      console.warn(
+        '[webhook] reply context parent not found:',
+        message.context.id
+      )
+    }
+  }
+
   // Insert message — field names MUST match the messages table schema
   // (see supabase/migrations/001_initial_schema.sql):
   //   conversation_id, sender_type, content_type, content_text,
@@ -445,12 +593,14 @@ async function processMessage(
   // parseMessageContent. Silence the unused-var warning:
   void mediaType
 
-  // The messages.content_type CHECK constraint only allows:
-  //   text, image, document, audio, video, location, template
+  // The messages.content_type CHECK constraint (widened in migration 010
+  // to add 'interactive' for button/list taps) allows:
+  //   text, image, document, audio, video, location, template, interactive
   // Map incoming WhatsApp types that aren't in that list to the closest
   // allowed value so the INSERT doesn't fail with a constraint error.
   const ALLOWED_CONTENT_TYPES = new Set([
-    'text', 'image', 'document', 'audio', 'video', 'location', 'template',
+    'text', 'image', 'document', 'audio', 'video',
+    'location', 'template', 'interactive',
   ])
   const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
     ? message.type
@@ -478,6 +628,11 @@ async function processMessage(
     message_id: message.id,
     status: 'delivered',
     created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
+    reply_to_message_id: replyToInternalId,
+    // Only populated for content_type='interactive'. Migration 010 added
+    // the column; null for every other content_type so existing inserts
+    // behave identically.
+    interactive_reply_id: interactiveReplyId,
   })
 
   if (msgError) {
@@ -505,6 +660,46 @@ async function processMessage(
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(userId, contactRecord.id)
 
+  // ============================================================
+  // Flow runner dispatch.
+  //
+  // If the runner consumes the message (it either advanced an active
+  // run or started a new one), we suppress the `new_message_received`
+  // + `keyword_match` automation triggers for this inbound. Customer
+  // is navigating the bot menu, not sending a fresh trigger word
+  // that should fork into automations.
+  //
+  // The relationship-level triggers (`new_contact_created`,
+  // `first_inbound_message`) still fire even when consumed — those
+  // are about WHO is messaging, not what they said.
+  //
+  // Awaited (not fire-and-forget) because we need the `consumed`
+  // result before deciding whether to dispatch automations. The
+  // runner has its own try/catch and never throws. Accounts with
+  // no active flows take the runner's early-exit "no_match" path
+  // basically for free (one indexed SELECT for the active run).
+  // ============================================================
+  const flowResult = await dispatchInboundToFlows({
+    userId,
+    contactId: contactRecord.id,
+    conversationId: conversation.id,
+    message:
+      interactiveReplyId
+        ? {
+            kind: 'interactive_reply',
+            reply_id: interactiveReplyId,
+            reply_title: contentText ?? '',
+            meta_message_id: message.id,
+          }
+        : {
+            kind: 'text',
+            text: contentText ?? message.text?.body ?? '',
+            meta_message_id: message.id,
+          },
+    isFirstInboundMessage,
+  })
+  const flowConsumed = flowResult.consumed
+
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
@@ -516,7 +711,12 @@ async function processMessage(
     | 'first_inbound_message'
     | 'new_message_received'
     | 'keyword_match'
-  )[] = ['new_message_received', 'keyword_match']
+  )[] = []
+  // Content-level triggers are suppressed when a flow consumed the
+  // message — see the comment block above.
+  if (!flowConsumed) {
+    automationTriggers.push('new_message_received', 'keyword_match')
+  }
   // new_contact_created fires only when the webhook just auto-created the
   // contact row. first_inbound_message fires whenever this is the contact's
   // first-ever customer-sent message — a superset that also catches
@@ -547,6 +747,12 @@ async function parseMessageContent(
   mediaUrl: string | null
   mediaType: string | null
   inputType: 'text' | 'audio'
+  /**
+   * For interactive button / list replies: the stable id of the tapped
+   * option. Used by the Flows engine to advance the per-contact run.
+   * Null for everything else.
+   */
+  interactiveReplyId: string | null
 }> {
   // getMediaUrl signature is (mediaId, accessToken) — earlier code had
   // the args swapped, so every verification hit an invalid Meta URL and
@@ -567,50 +773,51 @@ async function parseMessageContent(
     }
   }
 
-  const t = 'text' as const
-  const a = 'audio' as const
+  // Default shape — each case overrides only the fields it cares about.
+  const empty = {
+    contentText: null,
+    mediaUrl: null,
+    mediaType: null,
+    inputType: 'text' as const,
+    interactiveReplyId: null,
+  }
 
   switch (message.type) {
     case 'text':
-      return {
-        contentText: message.text?.body || null,
-        mediaUrl: null,
-        mediaType: null,
-        inputType: t,
-      }
+      return { ...empty, contentText: message.text?.body || null }
 
     case 'image':
       if (message.image?.id) {
         return {
+          ...empty,
           contentText: message.image.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.image.id),
           mediaType: message.image.mime_type,
-          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
+      return empty
 
     case 'video':
       if (message.video?.id) {
         return {
+          ...empty,
           contentText: message.video.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.video.id),
           mediaType: message.video.mime_type,
-          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
+      return empty
 
     case 'document':
       if (message.document?.id) {
         return {
+          ...empty,
           contentText: message.document.caption || message.document.filename || null,
           mediaUrl: await verifyAndBuildUrl(message.document.id),
           mediaType: message.document.mime_type,
-          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
+      return empty
 
     case 'audio': {
       // STT: transcribe the voice message so the AI can understand and reply
@@ -618,24 +825,23 @@ async function parseMessageContent(
         ? await transcribeAudio(message.audio.id, message.audio.mime_type, accessToken)
         : null
       return {
+        ...empty,
         contentText: transcript ?? '[voice message]',
         mediaUrl: message.audio?.id ? await verifyAndBuildUrl(message.audio.id) : null,
         mediaType: message.audio?.mime_type ?? null,
-        inputType: a,
+        inputType: 'audio' as const,
       }
     }
 
     case 'sticker':
-      // Stickers are images under the hood.
       if (message.sticker?.id) {
         return {
-          contentText: null,
+          ...empty,
           mediaUrl: await verifyAndBuildUrl(message.sticker.id),
           mediaType: message.sticker.mime_type,
-          inputType: t,
         }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
+      return empty
 
     case 'location':
       if (message.location) {
@@ -643,24 +849,30 @@ async function parseMessageContent(
         const locationText = [loc.name, loc.address, `${loc.latitude},${loc.longitude}`]
           .filter(Boolean)
           .join(' - ')
-        return { contentText: locationText, mediaUrl: null, mediaType: null, inputType: t }
+        return { ...empty, contentText: locationText }
       }
-      return { contentText: null, mediaUrl: null, mediaType: null, inputType: t }
+      return empty
 
     case 'reaction':
-      return {
-        contentText: message.reaction?.emoji || null,
-        mediaUrl: null,
-        mediaType: null,
-        inputType: t,
+      return { ...empty, contentText: message.reaction?.emoji || null }
+
+    case 'interactive': {
+      const reply =
+        message.interactive?.button_reply ?? message.interactive?.list_reply
+      if (reply?.id) {
+        return {
+          ...empty,
+          contentText: reply.title || reply.id,
+          interactiveReplyId: reply.id,
+        }
       }
+      return { ...empty, contentText: '[Interactive reply]' }
+    }
 
     default:
       return {
+        ...empty,
         contentText: `[Unsupported message type: ${message.type}]`,
-        mediaUrl: null,
-        mediaType: null,
-        inputType: t,
       }
   }
 }

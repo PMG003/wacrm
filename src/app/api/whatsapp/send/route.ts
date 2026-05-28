@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
       media_url,
       template_name,
       template_params,
+      reply_to_message_id,
     } = body
 
     if (!conversation_id || !message_type) {
@@ -136,6 +138,37 @@ export async function POST(request: Request) {
         })
     }
 
+    // Resolve the reply target (if any) to its Meta message_id, which is
+    // what `context.message_id` on the outgoing Meta payload needs. The
+    // parent must belong to this same conversation — otherwise a caller
+    // could quote messages they can't see by guessing UUIDs.
+    let contextMessageId: string | undefined
+    if (reply_to_message_id) {
+      const { data: parent, error: parentError } = await supabase
+        .from('messages')
+        .select('message_id, conversation_id')
+        .eq('id', reply_to_message_id)
+        .eq('conversation_id', conversation_id)
+        .maybeSingle()
+
+      if (parentError || !parent) {
+        return NextResponse.json(
+          { error: 'reply_to_message_id not found in this conversation' },
+          { status: 400 }
+        )
+      }
+      if (!parent.message_id) {
+        // Parent never reached Meta (still in 'sending' or 'failed') — we
+        // can't quote it on WhatsApp. Send without context rather than
+        // dropping the message entirely.
+        console.warn(
+          '[whatsapp/send] reply target has no Meta message_id; sending without context'
+        )
+      } else {
+        contextMessageId = parent.message_id
+      }
+    }
+
     // Send via Meta API — retry with phone-number variants if Meta rejects
     // with "recipient not in allowed list" (common in sandbox / when a
     // number was registered with/without a trunk 0). If an alternate
@@ -152,6 +185,7 @@ export async function POST(request: Request) {
           to: phone,
           templateName: template_name,
           params: template_params || [],
+          contextMessageId,
         })
         return result.messageId
       }
@@ -160,6 +194,7 @@ export async function POST(request: Request) {
         accessToken,
         to: phone,
         text: content_text,
+        contextMessageId,
       })
       return result.messageId
     }
@@ -225,6 +260,7 @@ export async function POST(request: Request) {
         template_name: template_name || null,
         message_id: waMessageId,
         status: 'sent',
+        reply_to_message_id: reply_to_message_id || null,
       })
       .select()
       .single()
@@ -246,6 +282,37 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', conversation_id)
+
+    // Pause any active Flow run for this contact — the agent stepping
+    // in is the strongest "yield, human is here" signal. See PR #2
+    // plan for why we pause (not end): preserves diagnostic state +
+    // lets the agent or the 24h timeout sweep cleanly resolve the
+    // run later. For accounts with no active runs the UPDATE matches
+    // zero rows — cheap and harmless.
+    try {
+      const { error: pauseErr } = await supabaseAdmin()
+        .from('flow_runs')
+        .update({
+          status: 'paused_by_agent',
+          ended_at: new Date().toISOString(),
+          end_reason: 'agent_replied',
+        })
+        .eq('user_id', user.id)
+        .eq('contact_id', contact.id)
+        .eq('status', 'active')
+      if (pauseErr) {
+        // Best-effort — log + continue. The agent's message already
+        // landed at Meta; don't fail the response over a bookkeeping
+        // miss. Worst case: a stale active run gets caught by the
+        // stale-run cron sweep within 24h.
+        console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+      }
+    } catch (err) {
+      console.error(
+        '[flows] pause-on-agent-send threw:',
+        err instanceof Error ? err.message : err,
+      )
+    }
 
     return NextResponse.json({
       success: true,
