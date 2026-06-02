@@ -682,10 +682,10 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         const profileLines = profileNote.note_text
           .split('\n')
           .slice(1)
-          .filter((l: string) => l.trim() && !l.startsWith('Updated:'))
+          .filter((l: string) => l.trim())
           .join('\n')
         if (profileLines) {
-          finalPrompt += `\n\nCONTACT HISTORY (from previous conversations):\n${profileLines}\nUse this context to avoid re-asking questions you already know the answer to.`
+          finalPrompt += `\n\nPREVIOUS CONVERSATION MEMORY (this customer has spoken with us before):\n${profileLines}\n\nIMPORTANT: Do NOT ask again about anything already captured above. Pick up the conversation where it left off. Reference their history naturally — e.g. "Last time you mentioned you're looking at Newtown...""`
         }
       }
       if (isVoice) {
@@ -931,41 +931,6 @@ async function markPending(id: string, status: 'done' | 'failed') {
 // Contact memory helpers
 // ------------------------------------------------------------
 
-function extractLeadProfile(messages: { role: string; content: string }[]): Record<string, string> {
-  const allText = messages.map(m => m.content).join(' ')
-  const lower = allText.toLowerCase()
-  const profile: Record<string, string> = {}
-
-  // Budget — prefer budget-context matches, fall back to bare ₹X amounts
-  const budgetCtx = [...lower.matchAll(
-    /(?:budget|afford|spend|range|up\s*to|maximum|max)[^.!?]{0,40}?(\d+(?:\.\d+)?\s*(?:cr(?:ore)?s?|lakh[s]?|l\b))/gi
-  )]
-  if (budgetCtx.length > 0) {
-    profile.budget = budgetCtx[budgetCtx.length - 1][1].trim()
-  } else {
-    const bare = [...lower.matchAll(/₹\s*(\d+(?:\.\d+)?\s*(?:cr(?:ore)?s?|lakh[s]?|l\b))/gi)]
-    if (bare.length > 0) profile.budget = bare[bare.length - 1][1].trim()
-  }
-
-  // Property type — take the last mention
-  const typeMatches = [...lower.matchAll(/(\d\s*bhk|villa|plots?|commercial\s*space|flat|apartment|bungalow|penthouse)/gi)]
-  if (typeMatches.length > 0) profile.property_type = typeMatches[typeMatches.length - 1][1].trim()
-
-  // Timeline — take the last mention
-  const timelineMatches = [...lower.matchAll(
-    /(immediately|urgent|asap|this\s*month|this\s*year|next\s*month|next\s*year|\d+\s*months?|one\s*year|just\s*exploring|still\s*exploring|no\s*rush)/gi
-  )]
-  if (timelineMatches.length > 0) profile.timeline = timelineMatches[timelineMatches.length - 1][1].trim()
-
-  // Purpose — take the last mention
-  const purposeMatches = [...lower.matchAll(
-    /(investment|rental\s*income|own\s*use|self[\s-]use|end[\s-]user|to\s*stay|to\s*live|personal\s*use)/gi
-  )]
-  if (purposeMatches.length > 0) profile.purpose = purposeMatches[purposeMatches.length - 1][1].trim()
-
-  return profile
-}
-
 async function saveLeadProfile(args: {
   db: ReturnType<typeof supabaseAdmin>
   contactId: string
@@ -974,19 +939,49 @@ async function saveLeadProfile(args: {
   messages: { role: string; content: string }[]
 }): Promise<void> {
   const { db, contactId, userId, existingNoteId, messages } = args
-  const profile = extractLeadProfile(messages)
-  if (Object.keys(profile).length === 0) return
+  if (messages.length < 2) return // need at least one exchange
 
-  const lines = ['[AI Lead Profile]']
-  if (profile.property_type) lines.push(`Property Type: ${profile.property_type}`)
-  if (profile.budget) lines.push(`Budget: ${profile.budget}`)
-  if (profile.purpose) lines.push(`Purpose: ${profile.purpose}`)
-  if (profile.timeline) lines.push(`Timeline: ${profile.timeline}`)
-  lines.push(`Updated: ${new Date().toISOString().split('T')[0]}`)
-  const noteText = lines.join('\n')
+  // Use LLM to extract rich structured context from the conversation
+  const extractionPrompt = `You are a CRM data extractor. Read this WhatsApp real estate conversation and extract key facts.
+
+Return ONLY a plain text block in this exact format (omit any line whose value is unknown):
+Property Type: [flat/office/villa/plot/commercial space]
+Budget: [e.g. ₹80L, ₹1.2Cr, ₹60/sqft/month]
+Purpose: [buy/rent/invest]
+Timeline: [e.g. 1 month, 3 months, exploring]
+Location Preference: [area names mentioned]
+Properties Discussed: [property names mentioned]
+Objections Raised: [price concerns, loan issues, etc.]
+Lead Score: [HOT/WARM/COLD with one-line reason]
+Conversation Summary: [2 sentences max — what the customer wants and where things stand]
+
+Do not add any explanation. Only output the lines above.`
+
+  let extracted = ''
+  try {
+    const result = await generateAiReply(
+      [
+        { role: 'system', content: extractionPrompt },
+        {
+          role: 'user',
+          content: messages.map(m => `${m.role === 'user' ? 'Customer' : 'Agent'}: ${m.content}`).join('\n'),
+        },
+      ],
+      300,
+    )
+    extracted = result?.trim() ?? ''
+  } catch {
+    // extraction failure is non-fatal — skip silently
+    return
+  }
+
+  if (!extracted) return
+
+  const noteText = `[AI Lead Profile]\n${extracted}\nLast Contact: ${new Date().toISOString().split('T')[0]}`
 
   if (existingNoteId) {
-    await db.from('contact_notes').delete().eq('id', existingNoteId)
+    await db.from('contact_notes').update({ note_text: noteText }).eq('id', existingNoteId)
+  } else {
+    await db.from('contact_notes').insert({ contact_id: contactId, user_id: userId, note_text: noteText })
   }
-  await db.from('contact_notes').insert({ contact_id: contactId, user_id: userId, note_text: noteText })
 }
