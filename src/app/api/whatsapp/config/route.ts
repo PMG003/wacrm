@@ -48,7 +48,7 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select('phone_number_id, access_token, status, webhook_token')
       .eq('user_id', user.id)
       .maybeSingle()
 

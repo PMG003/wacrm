@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Bot, Loader2, Plus, X, RefreshCw } from 'lucide-react';
+import { Bot, Loader2, Plus, X, RefreshCw, Upload, Trash2, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -57,9 +57,24 @@ export function AiAgentConfig() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [config, setConfig] = useState<AiConfig>(EMPTY);
   const [newArea, setNewArea] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [docs, setDocs] = useState<{ id: string; filename: string; file_type: string; created_at: string }[]>([]);
+  const [webhookToken, setWebhookToken] = useState('');
+
+  useEffect(() => {
+    fetch('/api/settings/knowledge-base')
+      .then(r => r.json())
+      .then(({ documents }) => { if (documents) setDocs(documents) })
+      .catch(() => {})
+    // Fetch webhook token from whatsapp config
+    fetch('/api/whatsapp/config')
+      .then(r => r.json())
+      .then(({ config: wc }) => { if (wc?.webhook_token) setWebhookToken(wc.webhook_token) })
+      .catch(() => {})
+  }, []);
 
   useEffect(() => {
     fetch('/api/settings/ai-agent')
@@ -139,6 +154,37 @@ export function AiAgentConfig() {
       toast.error(e instanceof Error ? e.message : 'Sync failed');
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const uploadDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/settings/knowledge-base', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setDocs(d => [data.document, ...d]);
+      toast.success(`${file.name} uploaded and indexed`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const deleteDoc = async (id: string, filename: string) => {
+    if (!confirm(`Delete "${filename}"?`)) return;
+    try {
+      await fetch(`/api/settings/knowledge-base/${id}`, { method: 'DELETE' });
+      setDocs(d => d.filter(doc => doc.id !== id));
+      toast.success('Document deleted');
+    } catch {
+      toast.error('Delete failed');
     }
   };
 
@@ -358,6 +404,73 @@ export function AiAgentConfig() {
           </CardContent>
         )}
       </Card>
+
+      {/* Knowledge Base */}
+      <Card className="bg-slate-900 border-slate-700">
+        <CardHeader>
+          <CardTitle className="text-white flex items-center gap-2">
+            <FileText className="size-5 text-emerald-400" /> Knowledge Base
+          </CardTitle>
+          <CardDescription className="text-slate-400">
+            Upload property brochures, floor plans, RERA docs, or price lists. The AI reads these to answer lead questions accurately.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <label className={`flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-slate-600 px-4 py-3 text-sm text-slate-400 hover:border-emerald-500 hover:text-emerald-400 transition-colors ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+            {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+            {uploading ? 'Uploading…' : 'Upload PDF or TXT (max 10 MB)'}
+            <input type="file" accept=".pdf,.txt" onChange={uploadDoc} className="hidden" />
+          </label>
+          {docs.length > 0 && (
+            <div className="space-y-2">
+              {docs.map(doc => (
+                <div key={doc.id} className="flex items-center justify-between rounded-lg bg-slate-800 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm text-slate-300">
+                    <FileText className="size-4 text-slate-500 shrink-0" />
+                    <span className="truncate max-w-xs">{doc.filename}</span>
+                    <span className="text-xs text-slate-500 uppercase">{doc.file_type}</span>
+                  </div>
+                  <button onClick={() => deleteDoc(doc.id, doc.filename)} className="text-slate-500 hover:text-red-400 transition-colors">
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Lead Webhook */}
+      {webhookToken && (
+        <Card className="bg-slate-900 border-slate-700">
+          <CardHeader>
+            <CardTitle className="text-white">IndiaMart / JustDial Lead Webhook</CardTitle>
+            <CardDescription className="text-slate-400">
+              Paste this URL in IndiaMart Seller Panel → CRM Webhook or JustDial Lead Manager. Leads auto-import as contacts and trigger the AI agent.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-2">
+              <Label className="text-slate-300 text-xs">IndiaMart Webhook URL</Label>
+              <div className="flex gap-2">
+                <code className="flex-1 rounded bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-emerald-400 break-all">
+                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/leads?token=${webhookToken}&source=indiamart`}
+                </code>
+                <Button variant="outline" className="border-slate-600 shrink-0 text-xs" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/leads?token=${webhookToken}&source=indiamart`); toast.success('Copied!') }}>Copy</Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-300 text-xs">JustDial Webhook URL</Label>
+              <div className="flex gap-2">
+                <code className="flex-1 rounded bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-emerald-400 break-all">
+                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/leads?token=${webhookToken}&source=justdial`}
+                </code>
+                <Button variant="outline" className="border-slate-600 shrink-0 text-xs" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/leads?token=${webhookToken}&source=justdial`); toast.success('Copied!') }}>Copy</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex justify-end">
         <Button

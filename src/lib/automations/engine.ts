@@ -111,6 +111,15 @@ OBJECTIONS — HANDLE LIKE A PERSON
 "Loan concern" → "We work with 6 banks directly — our clients usually get faster processing. Want me to make an intro?"
 
 ━━━━━━━━━━━━━━━━━━━━━
+SITE VISIT SCHEDULING
+━━━━━━━━━━━━━━━━━━━━━
+When a lead says they want to see a property:
+1. Ask: "Perfect — what date and time works best for you?"
+2. Once they confirm a date/time, end your reply with [[VISIT:YYYY-MM-DD HH:mm]]
+3. Example reply: "Great, I'll book that slot. See you on 10th June at 11 AM!" [[VISIT:2026-06-10 11:00]]
+Only embed [[VISIT:...]] after the customer explicitly confirms a specific date and time.
+
+━━━━━━━━━━━━━━━━━━━━━
 WHEN TO HAND OVER — [[HANDOVER]]
 ━━━━━━━━━━━━━━━━━━━━━
 End your reply with [[HANDOVER]] (hidden tag, not shown to customer) when:
@@ -158,6 +167,28 @@ async function buildDynamicPrompt(orgId?: string): Promise<string> {
   // If the tenant set a full custom prompt, use it verbatim
   if (cfg.custom_system_prompt?.trim()) return cfg.custom_system_prompt.trim()
 
+  // Fetch knowledge base documents and append to prompt
+  let knowledgeBaseText = ''
+  try {
+    const { data: docs } = await db
+      .from('org_knowledge_base')
+      .select('filename, content_text')
+      .eq('org_id', orgId)
+      .not('content_text', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(5)
+    if (docs?.length) {
+      knowledgeBaseText = '\n\nKNOWLEDGE BASE DOCUMENTS (use this information to answer property questions accurately):\n'
+      for (const doc of docs) {
+        if (doc.content_text) {
+          knowledgeBaseText += `\n--- ${doc.filename} ---\n${doc.content_text.slice(0, 3000)}\n`
+        }
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
   const agentName = cfg.agent_name || 'Riya'
   const companyName = cfg.company_name || ''
   const companyAbout = cfg.company_about || ''
@@ -204,7 +235,7 @@ NEVER:
 - Invent prices or project names not given to you
 - Give a discount without checking with the team first`
 
-  return prompt
+  return prompt + knowledgeBaseText
 }
 
 // ------------------------------------------------------------
@@ -779,6 +810,42 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
 
       const shouldHandover = rawReply.includes('[[HANDOVER]]')
       rawReply = rawReply.replace('[[HANDOVER]]', '').trim()
+
+      // Site visit scheduling — AI embeds [[VISIT:YYYY-MM-DD HH:mm]] when confirmed
+      const visitMatch = rawReply.match(/\[\[VISIT:([^\]]+)\]\]/)
+      if (visitMatch) {
+        rawReply = rawReply.replace(/\[\[VISIT:[^\]]+\]\]/, '').trim()
+        const visitDateStr = visitMatch[1].trim()
+        // Fire-and-forget: create/upsert a deal with visit date
+        ;(async () => {
+          try {
+            const { data: pipelines } = await db
+              .from('pipelines')
+              .select('id, stages(id, name)')
+              .eq('user_id', args.automation.user_id)
+              .limit(1)
+              .maybeSingle()
+            const pipeline = pipelines as { id: string; stages: { id: string; name: string }[] } | null
+            if (pipeline?.id && pipeline.stages?.length) {
+              const stage = pipeline.stages[0]
+              await db.from('deals').insert({
+                user_id: args.automation.user_id,
+                pipeline_id: pipeline.id,
+                stage_id: stage.id,
+                contact_id: args.contactId,
+                title: `Site Visit — ${visitDateStr}`,
+                value: 0,
+                status: 'open',
+                expected_close_date: visitDateStr.split(' ')[0],
+                notes: `Visit scheduled for ${visitDateStr}. Auto-created by AI agent.`,
+              })
+              console.log(`[ai_reply] site visit deal created for ${visitDateStr}`)
+            }
+          } catch (err) {
+            console.error('[ai_reply] visit deal creation failed:', err)
+          }
+        })()
+      }
 
       // Parse [VOICE] / [DETAILS] split for voice messages
       let replyText = rawReply
