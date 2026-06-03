@@ -56,8 +56,9 @@ export async function POST(req: Request) {
     if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
       contentText = await file.text()
     } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-      // Dynamic import to avoid build-time issues with pdf-parse
-      const pdfParse = (await import('pdf-parse')).default
+      // pdf-parse ships CJS; require avoids ESM default-export mismatch
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>
       const buffer = Buffer.from(bytes)
       const parsed = await pdfParse(buffer)
       contentText = parsed.text
