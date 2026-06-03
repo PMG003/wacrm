@@ -1,7 +1,6 @@
 'use client';
 
-import { Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState } from 'react';
 import { Settings, MessageSquare, Tag, User, Palette, Bot } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
@@ -13,87 +12,41 @@ import { SessionsCard } from '@/components/settings/sessions-card';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { AiAgentConfig } from '@/components/settings/ai-agent-config';
 
-const TAB_VALUES = [
-  'profile',
-  'whatsapp',
-  'templates',
-  'tags',
-  'appearance',
-  'ai-agent',
+const TABS = [
+  { value: 'profile',    label: 'Profile',        icon: User },
+  { value: 'whatsapp',   label: 'WhatsApp Config', icon: Settings },
+  { value: 'templates',  label: 'Templates',       icon: MessageSquare },
+  { value: 'tags',       label: 'Tags',            icon: Tag },
+  { value: 'appearance', label: 'Appearance',      icon: Palette },
+  { value: 'ai-agent',   label: 'AI Agent',        icon: Bot },
 ] as const;
-type TabValue = (typeof TAB_VALUES)[number];
 
-function isTabValue(v: string | null): v is TabValue {
-  return !!v && (TAB_VALUES as readonly string[]).includes(v);
-}
+type TabValue = (typeof TABS)[number]['value'];
 
-function SettingsContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const queryTab = searchParams.get('tab');
-  const tab: TabValue = isTabValue(queryTab) ? queryTab : 'profile';
-
-  const onChange = (next: TabValue) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('tab', next);
-    router.replace(`/settings?${params.toString()}`, { scroll: false });
-  };
+export default function SettingsPage() {
+  const [tab, setTab] = useState<TabValue>('profile');
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-white">Settings</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Manage your profile, WhatsApp® integration, message templates, and
-          tags.
+          Manage your profile, WhatsApp® integration, message templates, and tags.
         </p>
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => onChange(v as TabValue)}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
         <TabsList className="bg-slate-900 border border-slate-700">
-          <TabsTrigger
-            value="profile"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <User className="size-4" />
-            Profile
-          </TabsTrigger>
-          <TabsTrigger
-            value="whatsapp"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <Settings className="size-4" />
-            WhatsApp Config
-          </TabsTrigger>
-          <TabsTrigger
-            value="templates"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <MessageSquare className="size-4" />
-            Templates
-          </TabsTrigger>
-          <TabsTrigger
-            value="tags"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <Tag className="size-4" />
-            Tags
-          </TabsTrigger>
-          <TabsTrigger
-            value="appearance"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <Palette className="size-4" />
-            Appearance
-          </TabsTrigger>
-          <TabsTrigger
-            value="ai-agent"
-            className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
-          >
-            <Bot className="size-4" />
-            AI Agent
-          </TabsTrigger>
+          {TABS.map(({ value, label, icon: Icon }) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="data-active:bg-slate-800 data-active:text-primary text-slate-400"
+            >
+              <Icon className="size-4" />
+              {label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="profile" className="space-y-6">
@@ -123,13 +76,5 @@ function SettingsContent() {
         </TabsContent>
       </Tabs>
     </div>
-  );
-}
-
-export default function SettingsPage() {
-  return (
-    <Suspense>
-      <SettingsContent />
-    </Suspense>
   );
 }
