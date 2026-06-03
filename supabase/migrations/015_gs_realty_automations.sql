@@ -54,9 +54,9 @@ BEGIN
   -- Fires once when a new contact messages for the first time.
   -- Sends a warm human intro from Rahul, then AI takes over.
   -- ════════════════════════════════════════════════════════
-  INSERT INTO automations (user_id, name, description, trigger_type, trigger_config, is_active)
+  INSERT INTO automations (user_id, org_id, name, description, trigger_type, trigger_config, is_active)
   VALUES (
-    v_user_id,
+    v_user_id, v_org_id,
     '👋 A1 — First Contact',
     'Fires once on a brand-new contact. Rahul sends a human greeting then AI qualifies.',
     'first_inbound_message',
@@ -73,9 +73,9 @@ BEGIN
   -- Fires on every inbound message. AI qualifies, scores,
   -- handles objections, and triggers [[HANDOVER]] when ready.
   -- ════════════════════════════════════════════════════════
-  INSERT INTO automations (user_id, name, description, trigger_type, trigger_config, is_active)
+  INSERT INTO automations (user_id, org_id, name, description, trigger_type, trigger_config, is_active)
   VALUES (
-    v_user_id,
+    v_user_id, v_org_id,
     '🤖 A2 — AI Lead Agent',
     'Handles every inbound message with AI. Qualifies leads, nurtures them, and hands over to Gajendra when hot.',
     'new_message_received',
@@ -91,9 +91,9 @@ BEGIN
   -- Fires when 'hot-lead' tag is added (by AI via [[HANDOVER]]
   -- or manually by Basant). Sends escalation message and assigns.
   -- ════════════════════════════════════════════════════════
-  INSERT INTO automations (user_id, name, description, trigger_type, trigger_config, is_active)
+  INSERT INTO automations (user_id, org_id, name, description, trigger_type, trigger_config, is_active)
   VALUES (
-    v_user_id,
+    v_user_id, v_org_id,
     '🔥 A3 — Hot Lead → Gajendra',
     'Immediately escalates hot leads to Gajendra with a confirmation message.',
     'tag_added',
@@ -111,9 +111,9 @@ BEGIN
   -- 5 AI-driven follow-ups over 30 days. AI reads the lead
   -- profile each time and adapts its angle automatically.
   -- ════════════════════════════════════════════════════════
-  INSERT INTO automations (user_id, name, description, trigger_type, trigger_config, is_active)
+  INSERT INTO automations (user_id, org_id, name, description, trigger_type, trigger_config, is_active)
   VALUES (
-    v_user_id,
+    v_user_id, v_org_id,
     '🌡️ B1 — Warm Lead Nurture (30 days)',
     'Sends 5 AI follow-ups over 30 days. AI adapts approach based on lead profile each time.',
     'tag_added',
@@ -143,9 +143,9 @@ BEGIN
   -- Fires when 'cold-lead' tag is added.
   -- 3 AI touches over 60 days — low pressure, value-led.
   -- ════════════════════════════════════════════════════════
-  INSERT INTO automations (user_id, name, description, trigger_type, trigger_config, is_active)
+  INSERT INTO automations (user_id, org_id, name, description, trigger_type, trigger_config, is_active)
   VALUES (
-    v_user_id,
+    v_user_id, v_org_id,
     '❄️ B2 — Cold Lead Drip (60 days)',
     'Low-pressure 3-touch sequence over 60 days for cold leads not ready to move yet.',
     'tag_added',
