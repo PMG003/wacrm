@@ -41,6 +41,7 @@ export async function POST(req: Request) {
     languages: body.languages || ['en'],
     agent_tone: body.agent_tone || 'professional',
     active_listings: body.active_listings || null,
+    listings_sheet_url: body.listings_sheet_url || null,
     custom_system_prompt: body.custom_system_prompt || null,
     updated_at: new Date().toISOString(),
   }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Bot, Loader2, Plus, X } from 'lucide-react';
+import { Bot, Loader2, Plus, X, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,7 @@ interface AiConfig {
   languages: string[];
   agent_tone: Tone;
   active_listings: string;
+  listings_sheet_url: string;
   custom_system_prompt: string;
 }
 
@@ -48,12 +49,14 @@ const EMPTY: AiConfig = {
   languages: ['en'],
   agent_tone: 'professional',
   active_listings: '',
+  listings_sheet_url: '',
   custom_system_prompt: '',
 };
 
 export function AiAgentConfig() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [config, setConfig] = useState<AiConfig>(EMPTY);
   const [newArea, setNewArea] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -71,6 +74,7 @@ export function AiAgentConfig() {
             languages: c.languages ?? ['en'],
             agent_tone: c.agent_tone ?? 'professional',
             active_listings: c.active_listings ?? '',
+            listings_sheet_url: c.listings_sheet_url ?? '',
             custom_system_prompt: c.custom_system_prompt ?? '',
           });
         }
@@ -114,6 +118,29 @@ export function AiAgentConfig() {
 
   const removeArea = (area: string) =>
     setConfig(c => ({ ...c, service_areas: c.service_areas.filter(a => a !== area) }));
+
+  const syncSheet = async () => {
+    if (!config.listings_sheet_url.trim()) {
+      toast.error('Enter a Google Sheets URL first');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/settings/sync-listings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: config.listings_sheet_url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setConfig(c => ({ ...c, active_listings: data.listings }));
+      toast.success('Listings synced from Google Sheet');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -268,10 +295,32 @@ export function AiAgentConfig() {
         <CardHeader>
           <CardTitle className="text-white">Active Property Listings</CardTitle>
           <CardDescription className="text-slate-400">
-            Properties the AI can pitch to leads. Plain text — one property per block.
+            Sync from Google Sheets or paste manually. The AI pitches these to leads.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {/* Google Sheets sync */}
+          <div className="space-y-1.5">
+            <Label className="text-slate-300">Google Sheets URL</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                value={config.listings_sheet_url}
+                onChange={e => setConfig(c => ({ ...c, listings_sheet_url: e.target.value }))}
+                className="bg-slate-800 border-slate-600 text-white text-sm"
+              />
+              <Button
+                variant="outline"
+                onClick={syncSheet}
+                disabled={syncing}
+                className="border-slate-600 shrink-0 gap-2"
+              >
+                {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                {syncing ? 'Syncing…' : 'Sync'}
+              </Button>
+            </div>
+            <p className="text-xs text-slate-500">Sheet must be shared as "Anyone with the link can view"</p>
+          </div>
           <textarea
             rows={8}
             placeholder={`🏢 Martin Burn Business Park — Salt Lake Sector V\n  • Floor: 17th | Area: 3,030 sq ft | Rent: ₹43/sq ft\n  • Semi-Furnished | 3+3+3 year lease\n\n🏠 2BHK Flat — New Town Action Area II\n  • Area: 950 sqft | Price: ₹65L\n  • Ready to move | RERA registered`}
