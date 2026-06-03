@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Bot, Loader2, Plus, X, RefreshCw, Upload, Trash2, FileText } from 'lucide-react';
+import { Bot, Loader2, Plus, X, RefreshCw, Upload, Trash2, FileText, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -58,6 +58,9 @@ export function AiAgentConfig() {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [pastedText, setPastedText] = useState('');
+  const [extractedPreview, setExtractedPreview] = useState('');
   const [config, setConfig] = useState<AiConfig>(EMPTY);
   const [newArea, setNewArea] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -155,6 +158,39 @@ export function AiAgentConfig() {
     } finally {
       setSyncing(false);
     }
+  };
+
+  const extractListing = async () => {
+    if (!pastedText.trim()) { toast.error('Paste some property text first'); return; }
+    setExtracting(true);
+    setExtractedPreview('');
+    try {
+      const res = await fetch('/api/settings/extract-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: pastedText }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setExtractedPreview(data.listing);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Extraction failed');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const addExtractedToListings = () => {
+    if (!extractedPreview) return;
+    setConfig(c => ({
+      ...c,
+      active_listings: c.active_listings
+        ? c.active_listings.trim() + '\n\n' + extractedPreview
+        : extractedPreview,
+    }));
+    setExtractedPreview('');
+    setPastedText('');
+    toast.success('Listing added — click Save AI Config to apply');
   };
 
   const uploadDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -333,6 +369,59 @@ export function AiAgentConfig() {
               </button>
             ))}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Import from Portal */}
+      <Card className="bg-slate-900 border-slate-700">
+        <CardHeader>
+          <CardTitle className="text-white flex items-center gap-2">
+            <Sparkles className="size-5 text-yellow-400" /> Import from MagicBricks / 99acres / Housing / NoBroker
+          </CardTitle>
+          <CardDescription className="text-slate-400">
+            Open any listing on any portal → select all text → paste below → AI extracts a clean property card automatically.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <textarea
+            rows={5}
+            placeholder="Paste copied listing text from MagicBricks, 99acres, Housing.com, NoBroker, PropTiger…"
+            value={pastedText}
+            onChange={e => { setPastedText(e.target.value); setExtractedPreview(''); }}
+            className="w-full rounded-md bg-slate-800 border border-slate-600 text-white text-sm px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-yellow-500"
+          />
+          <Button
+            onClick={extractListing}
+            disabled={extracting || !pastedText.trim()}
+            className="bg-yellow-600 hover:bg-yellow-700 text-white gap-2"
+          >
+            {extracting ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            {extracting ? 'Extracting…' : 'Extract Property Details'}
+          </Button>
+
+          {extractedPreview && (
+            <div className="space-y-2">
+              <Label className="text-slate-300 text-xs">Extracted — review before adding:</Label>
+              <pre className="w-full rounded-md bg-slate-800 border border-emerald-600 text-emerald-300 text-xs px-3 py-3 whitespace-pre-wrap font-mono">
+                {extractedPreview}
+              </pre>
+              <div className="flex gap-2">
+                <Button
+                  onClick={addExtractedToListings}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm"
+                >
+                  Add to Active Listings
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => { setExtractedPreview(''); setPastedText(''); }}
+                  className="border-slate-600 text-slate-400 text-sm"
+                >
+                  Discard
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
